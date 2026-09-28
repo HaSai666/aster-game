@@ -7,15 +7,15 @@
   const BUYINS = [1000, 3000, 10000];
 
   const SYMBOLS = {
-    C: { glyph: "☄", name: "彗星", color: "#63eaff", pay: { 3: 0.35, 4: 1.2, 5: 8 } },
-    P: { glyph: "◈", name: "行星", color: "#b58cff", pay: { 3: 0.5, 4: 1.8, 5: 12 } },
-    M: { glyph: "☽", name: "月环", color: "#ff83df", pay: { 3: 0.75, 4: 2.5, 5: 18 } },
-    N: { glyph: "✹", name: "星云", color: "#69f1b7", pay: { 3: 1, 4: 4, 5: 30 } },
-    T: { glyph: "✦", name: "星辰", color: "#ffd36c", pay: { 3: 2, 4: 8, 5: 50 } },
-    A: { glyph: "♛", name: "王冠", color: "#fff1a6", pay: { 3: 3, 4: 12, 5: 80 } },
-    W: { glyph: "W", name: "Wild", color: "#ffffff" },
-    S: { glyph: "✪", name: "Scatter", color: "#ffbf66" },
-    E: { glyph: "◎", name: "星核", color: "#ffd36c" }
+    C: { glyph: "☄", shape: "comet", name: "彗星", color: "#63eaff", accent: "#c9fbff", pay: { 3: 0.35, 4: 1.2, 5: 8 } },
+    P: { glyph: "◈", shape: "planet", name: "行星", color: "#b58cff", accent: "#e2d6ff", pay: { 3: 0.5, 4: 1.8, 5: 12 } },
+    M: { glyph: "☽", shape: "moon", name: "月环", color: "#ff83df", accent: "#ffd7f4", pay: { 3: 0.75, 4: 2.5, 5: 18 } },
+    N: { glyph: "✹", shape: "nebula", name: "星云", color: "#69f1b7", accent: "#d5ffe9", pay: { 3: 1, 4: 4, 5: 30 } },
+    T: { glyph: "✦", shape: "star", name: "星辰", color: "#ffd36c", accent: "#fff3c3", pay: { 3: 2, 4: 8, 5: 50 } },
+    A: { glyph: "♛", shape: "crown", name: "王冠", color: "#fff1a6", accent: "#ffffff", pay: { 3: 3, 4: 12, 5: 80 } },
+    W: { glyph: "W", shape: "wild", name: "Wild", color: "#ffffff", accent: "#63eaff" },
+    S: { glyph: "✪", shape: "portal", name: "Scatter", color: "#ffbf66", accent: "#fff0bd" },
+    E: { glyph: "◎", shape: "core", name: "星核", color: "#ffd36c", accent: "#fff7d0" }
   };
   const NORMALS = ["C", "P", "M", "N", "T", "A"];
   const WEIGHTED = ["C","C","C","C","P","P","P","M","M","N","N","T","T","A","W","S","E","E","E","E"];
@@ -144,8 +144,18 @@
   }
   const audio = new AudioEngine();
 
+  function drawStar(graphics, radius, inner, points, rotation = -Math.PI / 2) {
+    const path = [];
+    for (let i = 0; i < points * 2; i++) {
+      const r = i % 2 === 0 ? radius : inner;
+      const a = rotation + (Math.PI * i) / points;
+      path.push(Math.cos(a) * r, Math.sin(a) * r);
+    }
+    graphics.drawPolygon(path);
+  }
+
   class PixiRenderer {
-    constructor(host) { this.host = host; this.app = null; this.board = null; this.reels = []; this.stars = []; this.fallback = false; }
+    constructor(host) { this.host = host; this.app = null; this.board = null; this.reels = []; this.stars = []; this.fallback = false; this.blur = null; }
     async init() {
       if (!window.PIXI) { this.initFallback(); return; }
       try {
@@ -153,10 +163,11 @@
         this.host.appendChild(this.app.view);
         this.board = new PIXI.Container();
         this.app.stage.addChild(this.board);
-        for (let i = 0; i < 42; i++) {
-          const star = new PIXI.Graphics().beginFill(i % 4 === 0 ? 0xffd36c : 0x80bfff, 0.28 + Math.random() * 0.5).drawCircle(0, 0, 0.5 + Math.random() * 1.8).endFill();
+        this.blur = PIXI.filters && new PIXI.filters.BlurFilter(2, 3);
+        for (let i = 0; i < 48; i++) {
+          const star = new PIXI.Graphics().beginFill(i % 5 === 0 ? 0xffd36c : 0x80bfff, 0.2 + Math.random() * 0.5).drawCircle(0, 0, 0.5 + Math.random() * 1.8).endFill();
           star.x = Math.random() * this.host.clientWidth; star.y = Math.random() * this.host.clientHeight;
-          star.v = 0.08 + Math.random() * 0.25; this.app.stage.addChild(star); this.stars.push(star);
+          star.v = 0.08 + Math.random() * 0.3; this.app.stage.addChild(star); this.stars.push(star);
         }
         this.rebuild();
         this.app.ticker.add(() => { if (!state.reducedMotion) this.stars.forEach((s) => { s.y += s.v; if (s.y > this.host.clientHeight + 4) s.y = -4; }); });
@@ -178,24 +189,64 @@
       if (!this.app) return;
       const w = this.host.clientWidth, h = this.host.clientHeight;
       this.app.renderer.resize(w, h);
-      this.board.removeChildren();
-      this.reels = [];
-      const cellH = Math.min(92, Math.max(48, (h - 36) / 3));
-      const gap = Math.max(5, Math.min(10, w / 80));
-      const cellW = (w - 28 - gap * 4) / 5;
+      this.board.removeChildren(); this.reels = [];
+      const cellH = Math.min(104, Math.max(54, (h - 44) / 3));
+      const gap = Math.max(7, Math.min(12, w / 72));
+      const cellW = (w - 34 - gap * 4) / 5;
       const top = (h - cellH * 3 - gap * 2) / 2;
       for (let c = 0; c < 5; c++) {
         const col = [];
         for (let r = 0; r < 3; r++) {
-          const text = new PIXI.Text("", new PIXI.TextStyle({ fontFamily: "Arial, Segoe UI Symbol, sans-serif", fontSize: Math.min(52, cellH * 0.6), fontWeight: "700", fill: "#ffffff", align: "center", dropShadow: true, dropShadowAlpha: 0.7, dropShadowBlur: 8, dropShadowDistance: 0 }));
-          text.anchor.set(0.5); text.x = 14 + cellW * c + gap * c + cellW / 2; text.y = top + cellH * r + gap * r + cellH / 2;
-          const x = 14 + cellW * c + gap * c, y = top + cellH * r + gap * r;
-          const bg = new PIXI.Graphics().lineStyle(1, 0x3b4d88, 1).beginFill(0x18234a, 0.9).drawRoundedRect(x, y, cellW, cellH, 10).endFill();
-          this.board.addChild(bg); this.board.addChild(text); col.push({ text, bg, x, y, cellW, cellH });
+          const x = 17 + cellW * c + gap * c, y = top + cellH * r + gap * r;
+          const bg = new PIXI.Graphics().lineStyle(1, 0x526aa4, 0.7).beginFill(0x111d42, 0.88).drawRoundedRect(x, y, cellW, cellH, 13).endFill();
+          const sheen = new PIXI.Graphics().lineStyle(1, 0xffffff, 0.05).drawRoundedRect(x + 2, y + 2, cellW - 4, cellH - 4, 11);
+          const icon = new PIXI.Container(); icon.x = x + cellW / 2; icon.y = y + cellH / 2;
+          this.board.addChild(bg); this.board.addChild(sheen); this.board.addChild(icon);
+          col.push({ icon, bg, sheen, x, y, cellW, cellH });
         }
         this.reels.push(col);
       }
       rendererReady = true; this.render(currentMatrix, []);
+    }
+    drawIcon(holder, key, size, active = false, spinning = false) {
+      holder.removeChildren();
+      const info = SYMBOLS[key], color = PIXI.utils.string2hex(info.color), accent = PIXI.utils.string2hex(info.accent || info.color);
+      const aura = new PIXI.Graphics().beginFill(color, active ? 0.22 : 0.09).drawCircle(0, 0, size * 0.78).endFill(); holder.addChild(aura);
+      const g = new PIXI.Graphics();
+      if (info.shape === "comet") {
+        g.lineStyle(Math.max(2, size * 0.08), accent, 0.25).moveTo(-size * .7, size * .38).lineTo(size * .05, -size * .05);
+        g.lineStyle(Math.max(2, size * 0.06), color, 0.45).moveTo(-size * .56, size * .15).lineTo(size * .08, -size * .08);
+        g.beginFill(color, 1).drawCircle(size * .15, -size * .15, size * .28).endFill(); g.beginFill(accent, .65).drawCircle(size * .08, -size * .22, size * .1).endFill();
+      } else if (info.shape === "planet") {
+        g.lineStyle(Math.max(2, size * .07), accent, .9).drawEllipse(0, 0, size * .62, size * .2);
+        g.beginFill(color, .9).drawCircle(0, 0, size * .42).endFill(); g.beginFill(accent, .35).drawCircle(-size * .12, -size * .14, size * .12).endFill();
+      } else if (info.shape === "moon") {
+        g.beginFill(color, .9).drawCircle(-size * .05, 0, size * .42).endFill(); g.beginFill(0x111d42, 1).drawCircle(size * .13, -size * .12, size * .38).endFill();
+        g.lineStyle(Math.max(2, size * .06), accent, .75).drawEllipse(0, size * .13, size * .62, size * .18);
+      } else if (info.shape === "nebula") {
+        g.beginFill(color, .32).drawCircle(-size * .2, 0, size * .32).endFill(); g.beginFill(accent, .3).drawCircle(size * .2, 0, size * .3).endFill();
+        g.beginFill(color, .95); drawStar(g, size * .43, size * .16, 6); g.endFill();
+      } else if (info.shape === "star") {
+        g.beginFill(color, .95); drawStar(g, size * .48, size * .2, 5); g.endFill(); g.lineStyle(1.5, accent, .95).drawCircle(0, 0, size * .19);
+      } else if (info.shape === "crown") {
+        g.beginFill(color, .9).drawPolygon([-size*.48,size*.25,-size*.34,-size*.25,-size*.08,size*.02,size*.12,-size*.32,size*.32,size*.02,size*.48,-size*.25,size*.38,size*.25]); g.endFill();
+        g.lineStyle(Math.max(2, size*.05), accent, .9).moveTo(-size*.48,size*.25).lineTo(size*.38,size*.25);
+      } else if (info.shape === "wild") {
+        g.lineStyle(Math.max(2, size*.06), accent, .8).drawCircle(0, 0, size*.48); g.lineStyle(Math.max(2, size*.04), color, .8).drawCircle(0, 0, size*.34);
+        const label = new PIXI.Text("W", new PIXI.TextStyle({ fontFamily: "Arial", fontSize: size*.52, fontWeight: "900", fill: accent, dropShadow: true, dropShadowColor: color, dropShadowBlur: 8 })); label.anchor.set(.5); holder.addChild(label);
+      } else if (info.shape === "portal") {
+        g.lineStyle(Math.max(2, size*.065), accent, .95).drawCircle(0, 0, size*.48); g.lineStyle(Math.max(2, size*.055), color, .75).drawCircle(0, 0, size*.3); g.lineStyle(Math.max(2, size*.04), accent, .8).arc(0, 0, size*.62, -.8, 1.7);
+        g.beginFill(color, .8); drawStar(g, size*.16, size*.07, 5); g.endFill();
+      } else {
+        g.beginFill(color, .9).drawPolygon([0,-size*.5,size*.36,0,0,size*.5,-size*.36,0]).endFill(); g.lineStyle(Math.max(2, size*.05), accent, .9).drawCircle(0, 0, size*.18);
+      }
+      holder.addChild(g);
+      if (active) { const ring = new PIXI.Graphics().lineStyle(Math.max(2, size*.045), 0xffd36c, .9).drawCircle(0, 0, size*.68); holder.addChild(ring); }
+      if (spinning) { const streak = new PIXI.Graphics().lineStyle(Math.max(2, size*.045), accent, .22).moveTo(-size*.62, size*.58).lineTo(size*.62, size*.58).moveTo(-size*.48, size*.7).lineTo(size*.45, size*.7); holder.addChild(streak); }
+    }
+    pulseReel(index) {
+      if (this.fallback || !this.reels[index]) return;
+      this.reels[index].forEach((item) => { item.icon.scale.set(1.08); setTimeout(() => item.icon.scale.set(1), 150); });
     }
     render(matrix, hits = [], spinning = false) {
       currentMatrix = matrix;
@@ -205,9 +256,10 @@
         return;
       }
       this.reels.forEach((col, c) => col.forEach((item, r) => {
-        const key = matrix[c][r], info = SYMBOLS[key], isHit = hits.some((h) => h.c === c && h.r === r);
-        item.text.text = info.glyph; item.text.style.fill = info.color; item.text.alpha = spinning ? 0.64 : 1; item.text.scale.set(isHit ? 1.14 : 1);
-        item.bg.clear().lineStyle(isHit ? 2 : 1, isHit ? 0xffd36c : 0x3b4d88, 1).beginFill(isHit ? 0x3d3152 : 0x18234a, 0.95).drawRoundedRect(item.x, item.y, item.cellW, item.cellH, 10).endFill();
+        const key = matrix[c][r], isHit = hits.some((h) => h.c === c && h.r === r);
+        this.drawIcon(item.icon, key, Math.min(item.cellW, item.cellH) * .38, isHit, spinning);
+        item.icon.alpha = spinning ? .62 : 1; item.icon.scale.set(isHit ? 1.1 : 1); item.icon.filters = spinning && this.blur ? [this.blur] : null;
+        item.bg.clear().lineStyle(isHit ? 2 : 1, isHit ? 0xffd36c : 0x526aa4, isHit ? 1 : .7).beginFill(isHit ? 0x3d3152 : 0x111d42, .94).drawRoundedRect(item.x, item.y, item.cellW, item.cellH, 13).endFill();
       }));
     }
   }
@@ -274,7 +326,7 @@
     if (phase !== "idle") return;
     if (!state.sessionBalance) { showBuyin(); return; }
     if (state.freeSpins <= 0 && state.sessionBalance < state.bet) { toast("本局余额不足，请收手或重新买入"); return; }
-    audio.unlock(); phase = "spinning"; updateUI(); els.stageWrap.classList.remove("shake");
+    audio.unlock(); phase = "spinning"; updateUI(); els.stageWrap.classList.remove("shake"); els.stageWrap.classList.add("is-spinning");
     if (state.freeSpins > 0) state.freeSpins -= 1; else state.sessionBalance -= state.bet;
     state.spinCount += 1; saveState(); audio.spin(); updateUI();
     const result = makeMatrix();
@@ -307,12 +359,12 @@
       for (let c = 0; c < 5; c++) {
         const interval = setInterval(() => { for (let r = 0; r < 3; r++) temp[c][r] = pick(WEIGHTED); renderer.render(temp, [], true); }, state.turbo ? 42 : 65);
         const stopTimer = setTimeout(() => {
-          clearInterval(interval); for (let r = 0; r < 3; r++) temp[c][r] = result[c][r]; renderer.render(temp, [], c < 4); audio.stop(c);
+          clearInterval(interval); for (let r = 0; r < 3; r++) temp[c][r] = result[c][r]; renderer.render(temp, [], c < 4); renderer.pulseReel(c); audio.stop(c);
           stopped += 1; if (stopped === 5) { renderer.render(result, []); resolve(); }
         }, duration * 0.37 + c * (duration * 0.115));
         timers.push(stopTimer);
       }
-    });
+    }).finally(() => els.stageWrap.classList.remove("is-spinning"));
   }
 
   function settle(matrix) {

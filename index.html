@@ -35,6 +35,7 @@
         <div class="result-line" id="result-line" aria-live="polite">选择一笔金币开始你的星际旋转</div>
         <div class="paytable-mini"><span>✦ 最高 80×</span><span>W Wild</span><span>✪ Scatter</span><span>◎ 星核</span><button id="paytable-btn">查看赔率</button></div>
       </section>
+      <aside class="right-rail" aria-label="控制与状态">
       <section class="controls-card" aria-label="旋转控制">
         <div class="control-row first-row"><div class="bet-control"><label for="bet-select">下注档位</label><select id="bet-select"><option value="10">10</option><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></div><button class="secondary-btn" id="bet-down" aria-label="降低下注">−</button><button class="secondary-btn" id="bet-up" aria-label="提高下注">＋</button><button class="turbo-btn" id="turbo-btn">快速 <span>OFF</span></button></div>
         <div class="control-row main-actions"><button class="action-btn collect-btn" id="collect-btn"><span>↙</span><b>收手</b><small>回收本局余额</small></button><button class="spin-btn" id="spin-btn"><span class="spin-icon">✦</span><b>旋转</b><small>SPACE</small></button><div class="auto-control"><button class="action-btn auto-btn" id="auto-btn"><span>∞</span><b>自动</b><small id="auto-label">选择次数</small></button><select id="auto-select" aria-label="自动旋转次数"><option value="10">10 次</option><option value="25">25 次</option><option value="50">50 次</option></select></div></div>
@@ -44,6 +45,7 @@
         <article class="panel log-panel"><div class="panel-heading"><h2>星际记录</h2><button class="text-btn" id="clear-log">清空</button></div><div class="event-log" id="event-log"><div class="log-empty">你的下一次爆发会记录在这里</div></div></article>
         <article class="panel achievement-panel"><div class="panel-heading"><h2>成就舱</h2><span id="achievement-count">0 / 5</span></div><div class="achievement-list" id="achievement-list"></div></article>
       </section>
+      </aside>
     </main>
     <footer class="footer"><span>ASTER ARCADE · 每一次旋转都只是虚拟金币</span><button id="reset-save" class="text-btn">重置本地进度</button></footer>
   </div>
