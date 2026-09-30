@@ -27,7 +27,13 @@
         <span class="brand-text"><b>金龙聚宝</b><small>243 WAYS · 虚拟金币</small></span>
       </div>
       <div class="topbar-right">
+        <button class="level-chip" id="level-chip" title="财神等级">
+          <span class="level-num">Lv.<b id="level-value">1</b></span>
+          <span class="level-track"><i id="level-fill"></i></span>
+          <span class="level-xp" id="level-xp">0 / 150</span>
+        </button>
         <span class="virtual-badge">虚拟金币 · 无真实货币</span>
+        <button class="icon-btn" id="daily-btn" aria-label="每日签到" title="每日签到"><span class="ico-gift"></span><i class="dot" id="daily-dot"></i></button>
         <button class="icon-btn" id="sound-btn" aria-label="音效开关" title="音效"><span class="ico-sound"></span></button>
         <button class="icon-btn" id="music-btn" aria-label="音乐开关" title="音乐"><span class="ico-music"></span></button>
         <button class="icon-btn" id="settings-btn" aria-label="设置" title="设置"><span class="ico-gear"></span></button>
@@ -40,6 +46,13 @@
           <div class="frame-top">
             <span class="corner tl"></span><span class="corner tr"></span>
             <div class="plaque">金 龍 聚 寶</div>
+          </div>
+
+          <!-- 累积彩金：每一次付费旋转都在往里投钱，数字一直在涨 -->
+          <div class="jackpot-bar" id="jackpot-bar">
+            <span class="jackpot-label">累 积 彩 金</span>
+            <b class="jackpot-value" id="jackpot-value">$0</b>
+            <span class="jackpot-hint">三龙聚顶必中</span>
           </div>
 
           <!-- 龙气：只有长度和光，没有任何数字 -->
@@ -116,6 +129,7 @@
               </select>
             </div>
             <button class="mini-btn" id="turbo-btn">快速 <b id="turbo-state">关</b></button>
+            <button class="mini-btn buy-btn" id="buy-btn">买龙门 <b id="buy-price">$400</b></button>
             <button class="mini-btn" id="collect-btn">收手</button>
             <button class="mini-btn" id="paytable-btn">赔率</button>
           </div>
@@ -124,13 +138,14 @@
 
       <aside class="sidebar">
         <section class="panel">
+          <div class="panel-head"><h2>今日任务</h2><span class="meta">完成即领赏</span></div>
+          <div class="mission-list" id="mission-list"></div>
+        </section>
+
+        <section class="panel">
           <div class="panel-head"><h2>当前状态</h2><span class="meta">第 <b id="spin-count">0</b> 转</span></div>
           <div class="mode-row"><span class="mode-dot"></span><b id="mode-label">等待入座</b></div>
-          <ul class="rule-list">
-            <li><i class="tag wild">龙</i>神龙落在 2/3/4 轮会<b>整轴展开</b></li>
-            <li><i class="tag scat">锣</i>3 个金锣开启<b>龙门免费游戏</b></li>
-            <li><i class="tag coin">财</i>招财钱币积攒<b>龙气</b>，满则聚宝盆</li>
-          </ul>
+          <div class="streak-row" id="streak-row"><span>连胜</span><b id="streak-value">0</b><small id="streak-best">最佳 0</small></div>
         </section>
 
         <section class="panel grow">
@@ -157,6 +172,20 @@
       <div class="feature-title" id="feature-title"></div>
       <div class="feature-sub" id="feature-sub"></div>
       <div class="feature-meta" id="feature-meta"></div>
+    </div>
+  </div>
+
+  <!-- 每日签到 -->
+  <div class="modal-backdrop" id="daily-modal" role="dialog" aria-modal="true" aria-labelledby="daily-title">
+    <div class="modal">
+      <button class="modal-close" data-close="daily-modal" data-silent="1" aria-label="关闭">×</button>
+      <div class="modal-seal">禄</div>
+      <p class="eyebrow">DAILY</p>
+      <h1 id="daily-title">每日签到</h1>
+      <p class="modal-copy">连续登录奖励递增，断一天从头再来。</p>
+      <div class="daily-grid" id="daily-grid"></div>
+      <button class="primary-btn" id="daily-claim">领取今日奖励</button>
+      <p class="modal-note" id="daily-note"></p>
     </div>
   </div>
 

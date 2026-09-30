@@ -32,6 +32,14 @@ SHOTS = os.path.join(ROOT, "tools", "_shots")
 PORT = 9333
 
 
+# "这一整段还没演完"：游戏还在忙，或者正等玩家按。
+# 不能只看免费/聚宝盆的 HUD —— 最后一次免费旋转可能刚好触发聚宝盆，
+# 那几秒里两个 HUD 都不在，但游戏其实还要玩家继续按。
+MANUAL = ("window.__jinlong.phase !== 'idle' || window.__jinlong.awaitingPress"
+          " || document.getElementById('free-hud').classList.contains('visible')"
+          " || document.getElementById('hold-hud').classList.contains('visible')")
+
+
 class Page:
     def __init__(self, ws_url):
         self.ws = websocket.create_connection(ws_url, timeout=30)
@@ -167,13 +175,29 @@ def run(keep):
         if frames < 20:
             failures.append(f"rAF 没有正常运行（{frames} 帧/秒），动画类检查不可信")
 
-        print("[1] 买入弹窗")
-        page.shot("01-buyin")
+        print("[1] 每日签到（新的一天会先弹这个）")
+        if page.js("document.getElementById('daily-modal').classList.contains('show')"):
+            page.shot("01-daily")
+            before = page.js("window.__jinlong.state.wallet")
+            page.js("document.getElementById('daily-claim').click()")
+            time.sleep(2.8)
+            after = page.js("window.__jinlong.state.wallet")
+            if after <= before:
+                failures.append(f"签到没有发钱（{before} → {after}）")
+            else:
+                print(f"    签到发了 {after - before}")
+            page.wait_for("!document.getElementById('feature-card').classList.contains('show')",
+                          timeout=20, label="签到特写收起")
+        else:
+            print("    今天已经签过了，跳过")
 
-        print("[2] 入座 2,500")
-        page.js("document.querySelector('#buyin-options button[data-amount=\"2500\"]').click()")
+        print("[2] 买入弹窗")
+        page.wait_for("document.getElementById('buyin-modal').classList.contains('show')",
+                      timeout=20, label="买入弹窗")
+        page.shot("02-buyin")
+        page.js("document.querySelector('#buyin-options button[data-amount=\"3000\"]').click()")
         time.sleep(0.6)
-        page.shot("02-table")
+        page.shot("03-table")
 
         print("[3] 单次旋转全过程")
         page.js("document.getElementById('spin-btn').click()")
@@ -253,8 +277,8 @@ def run(keep):
         page.shot("08-hold-board")
 
         presses = page.press_while(
-            "document.getElementById('hold-hud').classList.contains('visible')",
-            timeout=180, label="聚宝盆",
+            MANUAL,
+            timeout=200, label="聚宝盆",
             shots={"09-hold-await": "window.__jinlong.awaitingPress",
                    "10-hold-spinning": "document.getElementById('hold-hud').classList.contains('spinning')"})
         print(f"    玩家手动按了 {presses} 次重转")
@@ -289,9 +313,7 @@ def run(keep):
         time.sleep(0.8)
         page.shot("13-free-spins")
 
-        fs = page.press_while(
-            "document.getElementById('free-hud').classList.contains('visible')",
-            timeout=240, label="免费游戏")
+        fs = page.press_while(MANUAL, timeout=300, label="免费游戏")
         print(f"    玩家手动按了 {fs} 次免费旋转")
         if fs < 5:
             failures.append(f"免费游戏只按了 {fs} 次，手动模式可能没生效")
@@ -299,12 +321,64 @@ def run(keep):
         page.shot("14-free-summary")
 
         print("[7] 赔率弹窗")
-        page.wait_for("window.__jinlong.phase==='idle'", timeout=60, label="回到空闲")
+        page.wait_for("window.__jinlong.phase==='idle'", timeout=120, label="回到空闲")
         page.js("document.getElementById('paytable-btn').click()")
         time.sleep(0.6)
         page.shot("15-paytable")
         page.js("document.querySelector('[data-close=\"paytable-modal\"]').click()")
         time.sleep(0.4)
+
+        print("[8] 再次打开签到：应显示已领取，且不会牵动买入弹窗")
+        page.js("document.getElementById('daily-btn').click()")
+        time.sleep(0.6)
+        page.shot("17-daily-claimed")
+        if not page.js("document.getElementById('daily-claim').disabled"):
+            failures.append("同一天可以重复签到")
+        page.js("document.querySelector('#daily-modal [data-close]').click()")
+        time.sleep(0.8)
+        if page.js("document.getElementById('buyin-modal').classList.contains('show')"):
+            failures.append("中途关掉签到不该弹出买入弹窗")
+
+        print("[9] 买龙门（两段确认）")
+        page.js("document.getElementById('buy-btn').click()")    # 第一段：只武装
+        time.sleep(0.4)
+        if not page.js("document.getElementById('buy-btn').classList.contains('armed')"):
+            failures.append("买龙门的二次确认没有生效")
+        page.shot("18-buy-armed")
+        sess_before = page.js("window.__jinlong.session")
+        page.js("document.getElementById('buy-btn').click()")    # 第二段：真的买
+        page.wait_for("document.getElementById('free-hud').classList.contains('visible')",
+                      timeout=45, label="买到的免费游戏")
+        sess_after = page.js("window.__jinlong.session")
+        print(f"    花掉 {sess_before - sess_after}，进入免费游戏")
+        page.shot("19-bought-free")
+        bought = page.press_while(MANUAL, timeout=300, label="买到的免费游戏")
+        print(f"    手动按了 {bought} 次")
+        page.wait_for("window.__jinlong.phase==='idle'", timeout=120, label="回到空闲")
+
+        print("[10] 任务 / 等级 / 彩金")
+        meta = page.js("""JSON.stringify({
+          level: window.__jinlong.state.level,
+          xp: window.__jinlong.state.xp,
+          missions: window.__jinlong.state.missions.map(function(m){return m.label+' '+m.progress+'/'+m.target;}),
+          jackpot: document.getElementById('jackpot-value').textContent,
+          streak: document.getElementById('streak-value').textContent
+        })""")
+        print("   ", meta)
+        if page.js("window.__jinlong.state.missions.length") != 3:
+            failures.append("任务数量不是 3 条")
+        if page.js("document.getElementById('jackpot-value').textContent.indexOf('$')!==0"):
+            failures.append("彩金显示异常")
+        # 彩金必须随旋转增长
+        jp0 = page.js("window.__jinlong.engine.jackpot")
+        page.js("document.getElementById('spin-btn').click()")
+        page.wait_for("window.__jinlong.phase==='idle'", timeout=45, label="再转一次")
+        jp1 = page.js("window.__jinlong.engine.jackpot")
+        if jp1 <= jp0:
+            failures.append(f"彩金池没有增长（{jp0} → {jp1}）")
+        else:
+            print(f"    彩金池 {jp0:.2f} → {jp1:.2f}")
+        page.shot("20-meta")
 
         errs = page.js("window.__errs")
         if errs:

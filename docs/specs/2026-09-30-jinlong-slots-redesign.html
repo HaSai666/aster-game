@@ -44,7 +44,7 @@
 <div class="wrap">
 
 <h1>金龙聚宝 · 重构设计文档</h1>
-<p class="sub">2026-09-30　取代 2026-09-28「霓虹宇宙老虎机」　·　同日二稿：加回 LDW 与擦边球、玩法改手动、特效加码</p>
+<p class="sub">2026-09-30　取代 2026-09-28「霓虹宇宙老虎机」　·　二稿：加回 LDW 与擦边球、玩法改手动、特效加码<br>三稿：RTP 重新分配到玩法上、加入局外成长与累积彩金、聚宝盆改用真滚轮</p>
 
 <h2>一、为什么推倒重来</h2>
 <p>上一版存在四个层面的问题，任何一个单独修补都不够：</p>
@@ -122,39 +122,56 @@
 <p class="muted">实际赔付 = 下表数值 × Ways 数（最高 243）× 倍率。数值看起来小是 243 Ways 的正常量级。</p>
 <table>
 <tr><th>图标</th><th class="n">3 连</th><th class="n">4 连</th><th class="n">5 连</th></tr>
-<tr><td>铜钱</td><td class="n">0.03×</td><td class="n">0.09×</td><td class="n">0.32×</td></tr>
-<tr><td>福字</td><td class="n">0.05×</td><td class="n">0.15×</td><td class="n">0.48×</td></tr>
-<tr><td>宫灯</td><td class="n">0.07×</td><td class="n">0.21×</td><td class="n">0.75×</td></tr>
-<tr><td>玉葫芦</td><td class="n">0.09×</td><td class="n">0.30×</td><td class="n">1.15×</td></tr>
-<tr><td>锦鲤</td><td class="n">0.15×</td><td class="n">0.48×</td><td class="n">2.10×</td></tr>
-<tr><td>元宝</td><td class="n">0.30×</td><td class="n">1.05×</td><td class="n">4.60×</td></tr>
-<tr><td>貔貅</td><td class="n">0.65×</td><td class="n">2.40×</td><td class="n">13.0×</td></tr>
+<tr><td>铜钱</td><td class="n">0.020×</td><td class="n">0.051×</td><td class="n">0.187×</td></tr>
+<tr><td>福字</td><td class="n">0.031×</td><td class="n">0.093×</td><td class="n">0.270×</td></tr>
+<tr><td>宫灯</td><td class="n">0.041×</td><td class="n">0.112×</td><td class="n">0.400×</td></tr>
+<tr><td>玉葫芦</td><td class="n">0.051×</td><td class="n">0.177×</td><td class="n">0.650×</td></tr>
+<tr><td>锦鲤</td><td class="n">0.093×</td><td class="n">0.280×</td><td class="n">1.080×</td></tr>
+<tr><td>元宝</td><td class="n">0.177×</td><td class="n">0.600×</td><td class="n">2.320×</td></tr>
+<tr><td>貔貅</td><td class="n">0.380×</td><td class="n">1.380×</td><td class="n">6.250×</td></tr>
 </table>
 <p class="muted">流程是：先把结构（轮带、堆叠、玩法参数）定死，测出各项 RTP 构成，
 再对整张赔付表做线性缩放收敛到目标 95%。赔付表线性缩放不会改变命中率和波动性，
 所以只需要一到两轮迭代。</p>
 
-<h3>实测结果（2800 万次旋转，3 个随机种子）</h3>
+<h3>实测结果（3000 万次旋转，3 个随机种子）</h3>
 <table>
-<tr><th>指标</th><th class="n">值</th><th>目标</th></tr>
-<tr><td>RTP</td><td class="n">95.6%</td><td>≈95%　✓</td></tr>
-<tr><td>命中率（按轮）</td><td class="n">21.0%</td><td>≈22%　✓</td></tr>
-<tr><td>├ 低于下注的部分</td><td class="n">13.4%</td><td>不做庆祝</td></tr>
-<tr><td>单轮标准差</td><td class="n">16.0</td><td>中高波动　✓</td></tr>
-<tr><td>最大单转</td><td class="n">2500×</td><td>封顶生效　✓</td></tr>
-<tr><td>龙门免费游戏</td><td class="n">1/110 转</td><td>平均产出 37×</td></tr>
-<tr><td>聚宝盆</td><td class="n">1/81 转</td><td>平均 12.8× / 6.8 枚</td></tr>
-<tr><td>大满贯</td><td class="n">1/31,000 转</td><td>足够稀有</td></tr>
+<tr><th>指标</th><th class="n">值</th><th>说明</th></tr>
+<tr><td>RTP</td><td class="n">96.2%</td><td>三个种子 96.05 / 96.31 / 96.35</td></tr>
+<tr><td>命中率（按轮）</td><td class="n">20.8%</td><td>其中 15.1% 低于下注</td></tr>
+<tr><td>单轮标准差</td><td class="n">16.4</td><td>中高波动</td></tr>
+<tr><td>最大单转</td><td class="n">2500×</td><td>封顶生效</td></tr>
+<tr><td>龙门免费游戏</td><td class="n">1/111 转</td><td>平均产出 <strong>47×</strong></td></tr>
+<tr><td>聚宝盆</td><td class="n">1/112 转</td><td>平均 <strong>33×</strong> / 7.5 枚</td></tr>
+<tr><td>累积彩金</td><td class="n">1/1,740 转</td><td>平均 <strong>40×</strong></td></tr>
+<tr><td>大满贯</td><td class="n">1/21,000 转</td><td>十五格全满</td></tr>
 </table>
 
-<h3>RTP 构成</h3>
+<h3>RTP 构成：七成押在玩法上</h3>
 <table>
 <tr><th>来源</th><th class="n">占比</th></tr>
-<tr><td>基础游戏 243 Ways</td><td class="n">48.8%</td></tr>
-<tr><td>免费游戏 243 Ways</td><td class="n">30.7%</td></tr>
-<tr><td>聚宝盆（基础 + 免费）</td><td class="n">17.0%</td></tr>
-<tr><td>金锣 / 钱币散赔</td><td class="n">2.4%</td></tr>
+<tr><td>基础游戏 243 Ways</td><td class="n">29%</td></tr>
+<tr><td>龙门免费游戏</td><td class="n">36%</td></tr>
+<tr><td>聚宝盆（基础 + 免费）</td><td class="n">32%</td></tr>
+<tr><td>累积彩金</td><td class="n">2.5%</td></tr>
+<tr><td>金锣 / 钱币散赔</td><td class="n">2%</td></tr>
 </table>
+<div class="card">
+<p>三稿之前的分配是"基础 49% / 玩法 49%"，结果实测下来玩家的反馈是
+<strong>"进了玩法也只赚一点点，太憋屈"</strong>。问题不在平均值，在<strong>相对量级</strong>：
+当时聚宝盆平均只给 12.7× 下注，而默认下注只占本局余额的 0.4%，
+所以一次大张旗鼓的聚宝盆只换来 5% 的余额增长。</p>
+<p>三稿同时动了两头：</p>
+<ul>
+  <li><strong>把 RTP 挪过去</strong>：基础 243 Ways 从 49% 压到 29%，省下的 20 个点全给玩法。
+      聚宝盆 12.7× → <strong>33×</strong>，龙门 37× → <strong>47×</strong>。</li>
+  <li><strong>把下注抬上去</strong>：档位从 $5–$100 改成 $10–$250（默认 $25），
+      买入约 120 转而不是 250 转。一次聚宝盆直接是本局余额的四分之一强。</li>
+</ul>
+<p class="muted">代价是基础游戏明显变寡淡 —— 这是取舍，不是疏漏。
+现代高人气老虎机（Gates of Olympus、Sweet Bonanza 一类）基本都是这个结构：
+平时磨，玩法里一次给够。</p>
+</div>
 
 <h2>四、特殊玩法</h2>
 
@@ -307,6 +324,65 @@
 <h3>货币显示</h3>
 <p>所有金额统一带 <code>$</code> 前缀（金库、本局、下注、横幅、聚宝盆面值合计、战况日志、买入选项）。
 盘面上钱币格里的 <code>1× / 5×</code> 是倍数不是金额，保持不带符号。</p>
+
+<h2>六之三、局外成长与累积彩金</h2>
+<p>前两稿只有"这一转赢多少"，没有任何跨会话的目标，玩两百转就没理由再开一次。
+三稿补了五个系统，全部只发"金库"里的虚拟金币，属于水龙头，<strong>不计入老虎机 RTP</strong>。</p>
+<table>
+<tr><th>系统</th><th>钩子类型</th><th>参数</th></tr>
+<tr><td>财神等级</td><td>长期进度，永远看得见</td><td>经验 = 下注额；Lv.4 解锁 $100、Lv.8 解锁 $250</td></tr>
+<tr><td>今日任务</td><td>短期目标，完成即补新的</td><td>常驻 3 条，11 种类型 × 3 档难度</td></tr>
+<tr><td>每日签到</td><td>次日回访</td><td>7 天递增 $1,500 → $18,000，断一天重来</td></tr>
+<tr><td>连胜</td><td>即时反馈</td><td>3 连转暖、5 连起燃，只做表现不改赔付</td></tr>
+<tr><td>累积彩金</td><td>"再转一把"</td><td>每转投 2.5%，1/1,740 命中，平均 40×</td></tr>
+</table>
+
+<h3>彩金的底金必须自己挣</h3>
+<p>第一版写成"命中后把池子重置回固定底金 500"，看起来很自然 —— 但那 500 是白送的。
+每 1,825 转白送 50 倍下注，等于凭空多出 2.7% 的 RTP，实测直接从 96% 冲到 <strong>99.4%</strong>。</p>
+<p>正确做法是把投入拆成两股：<code>contribution</code>（2.0%）进可见奖池，
+<code>reseed</code>（0.5%）进一条隐藏储备；命中时整池带走，再从储备里垫出新的底金。
+这样"命中后不归零"的那笔钱也是玩家自己投进去的，长期 RTP 恰好等于 2.5%，实测吻合。</p>
+<p class="muted">显示上带两位小数。默认下注 $25 时每转只投 $0.50，不显示到分就看不出它在动，
+而"一直在涨"正是这条的全部意义 —— 真实累积奖池也是这么显示的。</p>
+
+<h3>购买龙门</h3>
+<p>价格 <strong>50× 下注</strong>，档位权重直接复制自然触发的分布（3 锣 95%、4 锣 4.8%、5 锣 0.2%），
+所以买到的和撞到的是同一个东西。按免费游戏实测平均 47× 算，购买 RTP 约 94.6%，略低于基础 96.2% ——
+和真机的 bonus buy 定价习惯一致。误点一次只会把按钮"上膛"，要按第二次才真的花钱。</p>
+
+<h2>六之四、质感</h2>
+<h3>聚宝盆改用真滚轮</h3>
+<p>原来重转时空格只是画一圈跑动的光弧，和普通游戏完全两套观感。
+现在复用同一套滚轮绘制 —— <strong>已锁定的钱币格纹丝不动，其余格子照常滚带动态模糊</strong>。
+实现上是把这一轴所有未锁定的格子并成一块裁剪区，再把轮带画进去。</p>
+<p class="muted">踩到一个坑：<code>roundRect()</code> 内部自己调 <code>beginPath()</code>，
+连着调只会留下最后一个矩形，导致只有最下面一格在滚。拆出一个只追加子路径的
+<code>roundRectPath()</code> 才对。</p>
+
+<h3>画面</h3>
+<ul>
+  <li><strong>金属渐变加窄高光</strong>：在 30% 处插一条镜面亮带、底部再回弹一点环境反光。
+      这两处是"金属"和"塑料"的分界线。</li>
+  <li><strong>格子做出凹陷</strong>：中心一小片光池让图标站得起来，顶边一道亮、底边一道暗做内斜角。</li>
+  <li><strong>图标轮廓光</strong>：剪影先压一层投影，再用 <code>lighter</code> 往上错半像素叠一层暖光。</li>
+  <li><strong>轴窗上下渐隐</strong>：图标是"从机器里转出来、再转回去"的。这一层让滚轮有了厚度。</li>
+</ul>
+
+<h3>音频</h3>
+<ul>
+  <li><strong>每条轴一个声像位置</strong>：第 1 轴偏左、第 5 轴偏右，停轮声从左扫到右。
+      这一下比任何混响都更能让机台"变宽"。</li>
+  <li><strong>停轮加一记低频</strong>：木鱼 + 古筝之外再叠一个短促的"咚"，落轴有了重量。</li>
+  <li><strong>背景乐扩成四声部</strong>：四小节走 宫→羽→徵→商 的和声，
+      琶音 + 低音 + 垫 + 笛子对句（正弦加颤音和气声，只在每两小节的后半段出现，留白才好听）。</li>
+</ul>
+
+<h3>兜底</h3>
+<p>演出流程是一长串 <code>await</code>，任何一步抛异常都会让 Promise 静默挂起、
+游戏卡在非 idle 状态再也点不动（本轮真的踩到一次：改了聚宝盆的数据结构，
+<code>holdLand</code> 还在往已删除的数组里写）。现在挂了个
+<code>unhandledrejection</code> 兜底，强制把状态收回可操作。</p>
 
 <h2>七、验证</h2>
 <table>

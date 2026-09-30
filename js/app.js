@@ -33,13 +33,19 @@
     "hold-hud", "hold-respins", "hold-total",
     "free-hud", "free-remaining", "free-multiplier", "free-total",
     "spin-btn", "spin-label", "spin-hint", "bet-down", "bet-up", "auto-btn", "auto-label",
-    "auto-select", "turbo-btn", "turbo-state", "collect-btn",
-    "sound-btn", "music-btn", "settings-btn", "paytable-btn",
+    "auto-select", "turbo-btn", "turbo-state", "collect-btn", "buy-btn", "buy-price",
+    "sound-btn", "music-btn", "settings-btn", "paytable-btn", "daily-btn", "daily-dot",
+    "level-chip", "level-value", "level-fill", "level-xp",
+    "jackpot-bar", "jackpot-value", "mission-list",
+    "streak-row", "streak-value", "streak-best",
+    "daily-modal", "daily-grid", "daily-claim", "daily-note",
     "buyin-modal", "buyin-options", "buyin-wallet", "topup-btn",
     "paytable-modal", "paytable-body", "settings-modal",
     "opt-motion", "opt-quickwin", "reset-save",
     "log-list", "achievement-list", "achievement-count", "toast"
   ].forEach(function (id) { el[id.replace(/-(\w)/g, function (m, p) { return p.toUpperCase(); })] = $(id); });
+
+  var META = CONFIG.META;
 
   var defaults = {
     wallet: CONFIG.ECONOMY.startingWallet,
@@ -52,7 +58,17 @@
     musicOn: true,
     turbo: false,
     reducedMotion: false,
-    quickWin: false
+    quickWin: false,
+    /* 局外成长 */
+    level: 1,
+    xp: 0,
+    missions: null,
+    missionsDone: 0,
+    lastDaily: "",
+    dailyStreak: 0,
+    bestStreak: 0,
+    jackpotPot: null,
+    jackpotReserve: 0
   };
 
   var state = load();
@@ -64,6 +80,9 @@
   var displayedSession = 0;
   var pressResolver = null;      // 等待玩家按「旋转」时挂在这里
   var awaitingPress = false;
+  var streak = 0;                // 连胜
+  var displayedJackpot = 0;
+  var buyArmed = 0;              // 买龙门的二次确认时间戳
 
   var audio = new window.ASTER_AUDIO.AudioEngine();
   var engine = new ENGINE.SlotEngine();
@@ -92,7 +111,16 @@
         musicOn: state.musicOn,
         turbo: state.turbo,
         reducedMotion: state.reducedMotion,
-        quickWin: state.quickWin
+        quickWin: state.quickWin,
+        level: state.level,
+        xp: state.xp,
+        missions: state.missions,
+        missionsDone: state.missionsDone,
+        lastDaily: state.lastDaily,
+        dailyStreak: state.dailyStreak,
+        bestStreak: state.bestStreak,
+        jackpotPot: engine.jackpot,
+        jackpotReserve: engine.jackpotReserve
       }));
     } catch (err) { /* 隐私模式下写不进去，不影响游戏 */ }
   }
@@ -101,6 +129,12 @@
   var nf = new Intl.NumberFormat("zh-CN");
   function fmt(v) { return nf.format(Math.max(0, Math.round(v || 0))); }
   function money(v) { return "$" + fmt(v); }
+  /* 彩金带两位小数：每次旋转只投进下注的 2%，不显示到分就看不出它在涨，
+   * 而"一直在涨"正是这条的全部意义。真实累积奖池也是这么显示的。 */
+  function moneyPrecise(v) {
+    var n = Math.max(0, v || 0);
+    return "$" + nf.format(Math.floor(n)) + "." + String(Math.floor((n % 1) * 100)).padStart(2, "0");
+  }
 
   function wait(ms) {
     if (state.reducedMotion) ms = Math.min(ms, 120);
@@ -177,6 +211,216 @@
     save();
   }
 
+  /* ==================================================================
+     局外成长：等级 / 任务 / 签到 / 彩金 / 连胜
+     这些发的都是"金库"里的虚拟金币，是水龙头，不算进老虎机 RTP。
+     ================================================================== */
+
+  /* ---- 财神等级 ---- */
+  function xpNeeded(level) { return META.level.curve(level); }
+
+  function addXp(amount) {
+    if (amount <= 0) return 0;
+    state.xp += amount;
+    var gained = 0;
+    while (state.level < META.level.maxLevel && state.xp >= xpNeeded(state.level)) {
+      state.xp -= xpNeeded(state.level);
+      state.level++;
+      gained++;
+    }
+    updateLevelUI();
+    return gained;
+  }
+
+  async function celebrateLevelUp(levels) {
+    var reward = 0;
+    for (var i = 0; i < levels; i++) reward += META.level.reward(state.level - i);
+    state.wallet += reward;
+    var unlocked = Object.keys(META.level.betUnlock).filter(function (b) {
+      var need = META.level.betUnlock[b];
+      return need <= state.level && need > state.level - levels;
+    });
+    audio.impact(3);
+    fx.impact(3, { colors: window.ASTER_FX.FESTIVE });
+    fx.rays(3200, 0.8);
+    showFeature("财 神 升 级", "Lv." + state.level,
+      "奖励 " + money(reward) + (unlocked.length ? " · 解锁下注 " + unlocked.map(function (b) { return "$" + b; }).join(" / ") : ""),
+      "gold");
+    logEvent("<b>升到 Lv." + state.level + "</b>　奖励 " + money(reward), "gold");
+    el.levelChip.classList.add("bump");
+    setTimeout(function () { el.levelChip.classList.remove("bump"); }, 900);
+    save();
+    await wait(2200);
+    hideFeature();
+    updateUI();
+  }
+
+  function betLocked(bet) {
+    var need = META.level.betUnlock[bet];
+    return need ? state.level < need : false;
+  }
+
+  function updateLevelUI() {
+    var need = xpNeeded(state.level);
+    el.levelValue.textContent = state.level;
+    el.levelFill.style.width = Math.min(100, (state.xp / need) * 100).toFixed(1) + "%";
+    el.levelXp.textContent = fmt(state.xp) + " / " + fmt(need);
+  }
+
+  /* ---- 任务 ---- */
+  function rollMission(exclude) {
+    var pool = META.missions.pool.filter(function (m) { return exclude.indexOf(m.key) < 0; });
+    if (!pool.length) pool = META.missions.pool;
+    var def = pool[Math.floor(Math.random() * pool.length)];
+    var target = def.targets[Math.floor(Math.random() * def.targets.length)];
+    return {
+      key: def.key,
+      label: def.label.replace("{n}", fmt(target)),
+      target: target,
+      progress: 0,
+      coin: Math.round(def.coin * target),
+      xp: Math.round(def.xp * target)
+    };
+  }
+
+  function ensureMissions() {
+    if (!Array.isArray(state.missions)) state.missions = [];
+    var guard = 0;
+    while (state.missions.length < META.missions.active && guard++ < 40) {
+      state.missions.push(rollMission(state.missions.map(function (m) { return m.key; })));
+    }
+  }
+
+  /* 累加型进度。bumpMissionMax 用于"单次达到 N"这类。 */
+  function bumpMission(key, amount) {
+    if (!amount) return;
+    state.missions.forEach(function (m) { if (m.key === key) m.progress += amount; });
+  }
+  function bumpMissionMax(key, value) {
+    state.missions.forEach(function (m) { if (m.key === key) m.progress = Math.max(m.progress, value); });
+  }
+
+  async function settleMissions() {
+    var done = state.missions.filter(function (m) { return m.progress >= m.target; });
+    if (!done.length) return;
+    for (var i = 0; i < done.length; i++) {
+      var m = done[i];
+      state.wallet += m.coin;
+      state.missionsDone++;
+      var levels = addXp(m.xp);
+      audio.impact(2);
+      fx.burst(70, { y: window.innerHeight * 0.4, speed: 420, size: 8 });
+      fx.flash(0.3);
+      toast("任务完成 · " + m.label + "　+" + money(m.coin));
+      logEvent("任务完成：" + m.label + "　<b>+" + money(m.coin) + "</b>", "gold");
+      /* 换一个新的进来，保持永远有三条在跑 */
+      var idx = state.missions.indexOf(m);
+      state.missions[idx] = rollMission(state.missions.map(function (x) { return x.key; }));
+      renderMissions();
+      updateUI();
+      await wait(700);
+      if (levels) await celebrateLevelUp(levels);
+    }
+    save();
+  }
+
+  function renderMissions() {
+    ensureMissions();
+    el.missionList.innerHTML = state.missions.map(function (m) {
+      var pctDone = Math.min(100, (m.progress / m.target) * 100);
+      return '<div class="mission">' +
+        '<div class="mission-top"><span>' + m.label + '</span><b>+' + money(m.coin) + "</b></div>" +
+        '<div class="mission-track"><i style="width:' + pctDone.toFixed(1) + '%"></i></div>' +
+        '<div class="mission-foot"><span>' + fmt(Math.min(m.progress, m.target)) + " / " + fmt(m.target) + "</span><small>+" + fmt(m.xp) + " XP</small></div>" +
+        "</div>";
+    }).join("");
+  }
+
+  /* ---- 每日签到 ---- */
+  function todayKey() {
+    var d = new Date();
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
+  function daysBetween(a, b) {
+    if (!a) return 99;
+    return Math.round((new Date(b) - new Date(a)) / 86400000);
+  }
+  function dailyAvailable() { return state.lastDaily !== todayKey(); }
+
+  function renderDaily() {
+    var next = dailyAvailable()
+      ? (daysBetween(state.lastDaily, todayKey()) === 1 ? state.dailyStreak % META.daily.cycle : 0)
+      : (state.dailyStreak - 1 + META.daily.cycle) % META.daily.cycle;
+    el.dailyGrid.innerHTML = META.daily.rewards.map(function (r, i) {
+      var cls = i < next ? "done" : i === next ? "next" : "";
+      return '<div class="daily-cell ' + cls + '"><span>第 ' + (i + 1) + ' 天</span><b>' + money(r) + "</b></div>";
+    }).join("");
+    el.dailyClaim.disabled = !dailyAvailable();
+    el.dailyClaim.textContent = dailyAvailable() ? "领取今日奖励" : "今天已领取";
+    el.dailyNote.textContent = dailyAvailable()
+      ? "连续第 " + (next + 1) + " 天"
+      : "明天回来继续，断一天会从第 1 天重新开始。";
+    el.dailyDot.classList.toggle("on", dailyAvailable());
+  }
+
+  /* 开局时先弹签到、关掉之后再弹买入；中途手动打开签到则不该牵动买入。 */
+  var pendingBuyinAfterDaily = false;
+  function closeDaily() {
+    el.dailyModal.classList.remove("show");
+    if (pendingBuyinAfterDaily) {
+      pendingBuyinAfterDaily = false;
+      setTimeout(openBuyin, 350);
+    }
+  }
+
+  async function claimDaily() {
+    if (!dailyAvailable()) { audio.ui("deny"); return; }
+    var gap = daysBetween(state.lastDaily, todayKey());
+    state.dailyStreak = gap === 1 ? state.dailyStreak + 1 : 1;
+    var index = (state.dailyStreak - 1) % META.daily.cycle;
+    var reward = META.daily.rewards[index];
+    state.wallet += reward;
+    state.lastDaily = todayKey();
+    var levels = addXp(Math.round(reward * 0.1));
+    save();
+    renderDaily();
+    updateUI();
+    closeDaily();
+    audio.impact(3);
+    audio.coinShower(1800, 22);
+    fx.impact(3, { colors: window.ASTER_FX.FESTIVE });
+    fx.coinStorm(2600, 70);
+    showFeature("签 到 有 赏", "连续第 " + state.dailyStreak + " 天", "获得 " + money(reward), "gold");
+    logEvent("每日签到第 " + state.dailyStreak + " 天　<b>+" + money(reward) + "</b>", "gold");
+    await wait(2200);
+    hideFeature();
+    if (levels) await celebrateLevelUp(levels);
+  }
+
+  /* ---- 累积彩金：数字一直在涨，是最直接的"再转一把"钩子 ---- */
+  function tickJackpot() {
+    var target = engine.jackpot;
+    if (Math.abs(target - displayedJackpot) < 0.004) displayedJackpot = target;
+    else displayedJackpot += (target - displayedJackpot) * 0.09;
+    el.jackpotValue.textContent = moneyPrecise(displayedJackpot);
+    requestAnimationFrame(tickJackpot);
+  }
+
+  /* ---- 连胜 ---- */
+  function updateStreak(won) {
+    if (won) {
+      streak++;
+      if (streak > state.bestStreak) state.bestStreak = streak;
+      bumpMissionMax("streak", streak);
+    } else {
+      streak = 0;
+    }
+    el.streakValue.textContent = streak;
+    el.streakBest.textContent = "最佳 " + state.bestStreak;
+    el.streakRow.className = "streak-row" + (streak >= 5 ? " hot" : streak >= 3 ? " warm" : "");
+  }
+
+
   /* ---------------- 界面刷新 ---------------- */
   function renderAchievements() {
     var done = ACHIEVEMENTS.filter(function (a) { return state.achievements[a.id]; }).length;
@@ -200,7 +444,7 @@
 
     var specials = [
       { key: "W", title: "神龙 · 百搭", body: "只出现在第 2/3/4 轮。落轴后<b>整轴展开</b>，替代所有普通图标。" },
-      { key: "S", title: "金锣 · 免费游戏", body: "任意 <b>3/4/5 个</b> → 分别赔 2× / 10× / 50×，并开启 <b>8 / 12 / 18</b> 次免费旋转（每一次都由你自己按）。" },
+      { key: "S", title: "金锣 · 免费游戏", body: "任意 <b>3/4/5 个</b> → 分别赔 2× / 10× / 50×，并开启 <b>9 / 14 / 20</b> 次免费旋转（每一次都由你自己按）。" },
       { key: "C", title: "招财钱币", body: "为<b>龙气</b>充能。3 枚以上还有额外散赔；龙气满时进入 <b>聚宝盆</b>。" }
     ].map(function (item) {
       return '<div class="pay-row special"><canvas class="pay-icon" data-symbol="' + item.key + '" width="56" height="56"></canvas>' +
@@ -217,7 +461,7 @@
       "<li><b>满堂金</b>　　3 枚以上招财钱币 → 龙气额外上涨</li>" +
       "<li><b>龙锣共鸣</b>　2 个金锣 + 至少 1 条神龙 → 神龙化锣，<b>补足触发免费游戏</b></li>" +
       "</ul>" +
-      '<h3>免费游戏 · 龙门</h3><p class="pay-note">起始 <b>2×</b> 倍率，每有一次中奖旋转 <b>+1×</b>（最高 5×）。期间再出 3 个金锣可 <b>+5 次</b>。' +
+      '<h3>免费游戏 · 龙门</h3><p class="pay-note">起始 <b>4×</b> 倍率，每有一次中奖旋转 <b>+1×</b>（最高 8×）。期间再出 3 个金锣可 <b>+5 次</b>。' +
       "每一次免费旋转都由玩家<b>手动按下</b>。</p>" +
       '<h3>聚宝盆 · 龙气充满时自动开启</h3><p class="pay-note">盘面清空，落下的钱币<b>锁定</b>并带有面值；初始 3 次重转，每次落新币重置为 3 次。' +
       "<b>每一次重转也都由你自己按</b>，按得越久转得越久。填满 15 格额外奖励 <b>200×</b>。</p>" +
@@ -288,7 +532,7 @@
       }
     }
     el.betDown.disabled = busy || free;
-    el.betUp.disabled = busy || free;
+    el.betUp.disabled = busy || free || betLocked(nextBet(1));
     el.collectBtn.disabled = busy || session <= 0 || free;
     el.autoBtn.disabled = session <= 0 || free;
     el.autoBtn.classList.toggle("on", autoRemaining > 0);
@@ -298,10 +542,16 @@
     el.soundBtn.classList.toggle("off", !state.soundOn);
     el.musicBtn.classList.toggle("off", !state.musicOn);
 
+    var price = state.bet * F.buyFeature.price;
+    el.buyPrice.textContent = money(price);
+    el.buyBtn.disabled = busy || free || session < price;
+    el.buyBtn.classList.toggle("armed", buyArmed > Date.now());
+
     document.querySelectorAll("#buyin-options button").forEach(function (b) {
       b.disabled = state.wallet < Number(b.dataset.amount);
     });
     updateCharge(false);
+    updateLevelUI();
   }
 
   /* 余额数字滚动。大奖时滚得久一点，让"变多"这件事被看见。 */
@@ -407,6 +657,11 @@
       displayedSession = session;
       state.spinCount++;
       unlock("first");
+      /* 经验按下注额给：押得大升得快 */
+      var levels = addXp(state.bet);
+      bumpMission("spins", 1);
+      bumpMission("wager", state.bet);
+      if (levels) { state.__pendingLevels = (state.__pendingLevels || 0) + levels; }
     }
     updateUI();
 
@@ -451,7 +706,29 @@
     session += outcome.totalWin;
     displayedSession = session;
     if (outcome.totalWin > state.bestWin) state.bestWin = outcome.totalWin;
+
+    /* 任务与连胜结算 */
+    bumpMission("won", outcome.totalWin);
+    bumpMission("dragons", outcome.wildReels.length);
+    bumpMission("coins", outcome.coinCount);
+    bumpMission("scatters", outcome.scatterCount);
+    if (outcome.free.triggered) bumpMission("frees", 1);
+    if (outcome.hold) bumpMission("holds", 1);
+    if (outcome.totalWin > 0) bumpMission("wins", 1);
+    bumpMissionMax("bestX", outcome.totalWin / outcome.bet);
+    updateStreak(outcome.totalWin > 0);
+    renderMissions();
     save();
+    updateUI();
+
+    /* 升级和任务结算也算演出的一部分：这段时间 phase 仍然不是 idle，
+     * 玩家按不动旋转键，外部（比如端到端检查）也能看出"还没演完"。 */
+    if (state.__pendingLevels) {
+      var lv = state.__pendingLevels;
+      state.__pendingLevels = 0;
+      await celebrateLevelUp(lv);
+    }
+    await settleMissions();
 
     phase = "idle";
     updateUI();
@@ -623,6 +900,30 @@
     /* 6. 聚宝盆 */
     if (outcome.hold) await runHold(outcome);
 
+    /* 6.5 累积彩金 —— 整局最响的一下 */
+    if (outcome.jackpot.hit) {
+      audio.grand();
+      fx.impact(4, { colors: window.ASTER_FX.FESTIVE });
+      fx.rays(9000, 1);
+      fx.coinStorm(8000, 190);
+      fx.vignette(true, "rgba(255,90,60,.5)");
+      for (var sw = 0; sw < 8; sw++) {
+        setTimeout(function () { fx.shockwave({ color: "#ffe08a", width: 16, dur: 1400 }); }, sw * 300);
+      }
+      renderer.coinRain(200);
+      showFeature("累 积 彩 金", "财神降临", money(outcome.jackpot.win), "grand");
+      logEvent("<b>累积彩金命中</b>　<b>+" + money(outcome.jackpot.win) + "</b>", "gold");
+      await wait(3600);
+      hideFeature();
+      var jTier = ENGINE.winTier(outcome.jackpot.win, bet);
+      showBanner(jTier, outcome.jackpot.win, "累积彩金");
+      await countSession(session + outcome.spinWin + (outcome.hold ? outcome.hold.total : 0) + outcome.jackpot.win, 2600);
+      await wait(2400);
+      hideBanner();
+      if (engine.mode !== "free" && phase !== "hold") fx.vignette(false);
+      displayedJackpot = engine.jackpot;
+    }
+
     /* 7. 免费游戏开启 */
     if (outcome.free.triggered) {
       unlock("free");
@@ -695,17 +996,17 @@
       updateUI();
       await waitForPress("重 转", "剩 " + respins + " 次");
 
-      /* 按得越久转得越久：每一轮都比上一轮再长一点 */
+      /* 按得越久转得越久：每一轮都比上一轮再长一点。
+       * 转法和普通游戏完全一样，只是已锁定的钱币格不参与滚动。 */
       var ms = Math.min(H.spinMsMax, H.spinMs + round * H.spinMsStep);
       if (state.turbo) ms *= 0.6;
-      renderer.holdSpinning(true);
       audio.startSpinLoop();
       audio.riser(ms, { vol: 0.16 });
       fx.rays(ms + 400, 0.4);
       el.holdHud.classList.add("spinning");
-      await new Promise(function (r) { setTimeout(r, ms); });
+      renderer.onHoldReelStop = function (index) { audio.reelStop(index, false); };
+      await renderer.holdSpinReels(ms);
       el.holdHud.classList.remove("spinning");
-      renderer.holdSpinning(false);
       audio.stopSpinLoop();
 
       if (step.landed.length) {
@@ -792,6 +1093,47 @@
       fx.flash(0.3);
       fx.shake(12, 380);
     }
+  }
+
+  /* ---------------- 买龙门（bonus buy）---------------- */
+  async function buyFeature() {
+    if (phase !== "idle" || engine.mode === "free") { audio.ui("deny"); return; }
+    var price = state.bet * F.buyFeature.price;
+    if (session < price) { audio.ui("deny"); toast("本局余额不足以买龙门"); return; }
+
+    /* 两段确认：误点一下不会直接花掉 40 倍下注 */
+    if (buyArmed < Date.now()) {
+      buyArmed = Date.now() + 4000;
+      updateUI();
+      toast("再按一次确认：" + money(price) + " 买入龙门");
+      setTimeout(updateUI, 4100);
+      return;
+    }
+    buyArmed = 0;
+
+    session -= price;
+    displayedSession = session;
+    bumpMission("wager", price);
+    var levels = addXp(price);
+    var granted = engine.buyFreeSpins();
+    unlock("free");
+    save();
+
+    audio.freeSpinsStart();
+    fx.impact(4, { colors: window.ASTER_FX.FESTIVE, color: "#ffd15c" });
+    fx.rays(4200, 0.9);
+    fx.coinStorm(3000, 70);
+    fx.vignette(true, "rgba(232,182,64,.4)");
+    showFeature("买 入 龙 门", granted.spins + " 次免费旋转",
+      "花费 " + money(price) + " · 起始 " + F.freeSpins.startMultiplier + "×", "gong");
+    logEvent("买入龙门 " + money(price) + "　→ " + granted.spins + " 次免费旋转", "gold");
+    await wait(2600);
+    hideFeature();
+    audio.setIntensity(1);
+    document.body.classList.add("free-mode");
+    if (levels) await celebrateLevelUp(levels);
+    armSpinButton("免费旋转", "剩 " + engine.freeSpins + " 次");
+    updateUI();
   }
 
   /* ---------------- 买入 / 收手 ---------------- */
@@ -893,6 +1235,13 @@
 
     el.paytableBtn.addEventListener("click", function () { el.paytableModal.classList.add("show"); });
     el.settingsBtn.addEventListener("click", function () { el.settingsModal.classList.add("show"); });
+    el.buyBtn.addEventListener("click", buyFeature);
+    el.dailyBtn.addEventListener("click", function () { renderDaily(); el.dailyModal.classList.add("show"); });
+    el.dailyModal.addEventListener("click", function (e) {
+      if (e.target === el.dailyModal || e.target.closest("[data-close]")) closeDaily();
+    });
+    el.levelChip.addEventListener("click", function () { toast("Lv." + state.level + " · 每次旋转按下注额获得经验"); });
+    el.dailyClaim.addEventListener("click", claimDaily);
     document.querySelectorAll("[data-close]").forEach(function (btn) {
       btn.addEventListener("click", function () { $(btn.dataset.close).classList.remove("show"); });
     });
@@ -955,16 +1304,42 @@
     document.addEventListener("visibilitychange", function () {
       if (document.hidden) { audio.stopSpinLoop(); audio.stopAnticipation(); }
     });
+
+    /* 兜底：演出流程是一长串 await，任何一步抛异常都会让 Promise 静默挂起、
+     * 游戏卡在非 idle 状态再也点不动。这里强制把状态收回来。 */
+    window.addEventListener("unhandledrejection", function (e) {
+      console.error("演出中断，已恢复可操作状态：", e.reason);
+      phase = "idle";
+      disarmSpinButton();
+      hideFeature();
+      hideBanner();
+      el.holdHud.classList.remove("visible");
+      if (renderer) { renderer.exitHold(); renderer.clearHighlight(); }
+      audio.stopSpinLoop();
+      audio.stopAnticipation();
+      document.body.classList.remove("hold-mode");
+      updateUI();
+    });
   }
 
   function stepBet(dir) {
+    var next = nextBet(dir);
+    if (next === state.bet) { audio.ui("deny"); return; }
+    if (betLocked(next)) {
+      audio.ui("deny");
+      toast("下注 $" + next + " 需要 Lv." + META.level.betUnlock[next]);
+      return;
+    }
+    state.bet = next;
+    save(); updateUI();
+  }
+
+  /* 下一档下注（不判断是否解锁，解锁在 stepBet / updateUI 里判） */
+  function nextBet(dir) {
     var bets = CONFIG.ECONOMY.bets;
     var i = bets.indexOf(state.bet);
     if (i < 0) i = 0;
-    var next = Math.min(bets.length - 1, Math.max(0, i + dir));
-    if (next === i) { audio.ui("deny"); return; }
-    state.bet = bets[next];
-    save(); updateUI();
+    return bets[Math.min(bets.length - 1, Math.max(0, i + dir))];
   }
 
   /* ---------------- 启动 ---------------- */
@@ -974,6 +1349,10 @@
     fx = new window.ASTER_FX.ScreenFX(el.fxCanvas, document.querySelector(".shell"));
     fx.reduced = state.reducedMotion;
     engine.charge = Math.min(F.charge.max - 1, state.charge || 0);
+    /* 彩金池和储备跨会话延续，玩家离开时攒的钱不会白攒 */
+    if (typeof state.jackpotPot === "number") engine.jackpot = state.jackpotPot;
+    engine.jackpotReserve = state.jackpotReserve || 0;
+    displayedJackpot = engine.jackpot;
 
     /* 开局摆一个不中奖的盘面，别一进来就像刚中了什么 */
     renderer.setStops([4, 17, 31, 46, 9]);
@@ -990,8 +1369,13 @@
 
     renderPaytable();
     renderAchievements();
+    renderMissions();
+    renderDaily();
+    updateLevelUI();
+    updateStreak(false);
     bind();
     updateUI();
+    tickJackpot();
 
     window.__jinlong = {
       get engine() { return engine; },
@@ -1015,6 +1399,11 @@
         autoRemaining = 40;
         setTimeout(function () { updateUI(); spin(); }, 400);
       }
+    } else if (dailyAvailable()) {
+      /* 新的一天：先把签到推到玩家眼前，关掉之后再让他选买入 */
+      pendingBuyinAfterDaily = true;
+      renderDaily();
+      el.dailyModal.classList.add("show");
     } else {
       openBuyin();
     }

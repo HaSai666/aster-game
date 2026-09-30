@@ -376,7 +376,7 @@
   Renderer.prototype.enterHold = function (board) {
     this.hold = {
       board: board.slice(),
-      spinning: new Array(REELS * ROWS).fill(false),
+      spinningReels: new Array(REELS).fill(false),
       pop: new Array(REELS * ROWS).fill(0)
     };
     this.clearHighlight();
@@ -384,20 +384,60 @@
 
   Renderer.prototype.exitHold = function () { this.hold = null; };
 
-  Renderer.prototype.holdSpinning = function (on) {
-    if (!this.hold) return;
-    for (var i = 0; i < this.hold.spinning.length; i++) {
-      this.hold.spinning[i] = on && !this.hold.board[i];
+  Renderer.prototype._reelHasFreeCell = function (c) {
+    for (var r = 0; r < ROWS; r++) if (!this.hold.board[c * ROWS + r]) return true;
+    return false;
+  };
+
+  /* 聚宝盆重转：复用普通游戏的滚轮动画，只是已锁定的钱币格被抠掉不滚。
+   * 整轴都锁满的轴直接不动。 */
+  Renderer.prototype.holdSpinReels = function (durationMs) {
+    var self = this;
+    if (!this.hold) return Promise.resolve();
+    var jobs = [];
+    for (var c = 0; c < REELS; c++) {
+      var free = this._reelHasFreeCell(c);
+      this.hold.spinningReels[c] = free;
+      if (free) jobs.push(this._spinReelTo(c, durationMs + c * 110));
     }
+    if (!jobs.length) return new Promise(function (r) { setTimeout(r, 300); });
+    return Promise.all(jobs);
+  };
+
+  /* 把一条轴转到一个随机停点。聚宝盆里落哪些币由引擎说了算，
+   * 轮带上转过去的图标只是视觉填充，所以随便停在哪都行。 */
+  Renderer.prototype._spinReelTo = function (index, dur) {
+    var self = this;
+    var reel = this.reels[index];
+    var len = this.strips[index].length;
+    var stop = Math.floor(Math.random() * len);
+    var from = reel.pos;
+    var need = mod(from - stop, len);
+    var cycles = Math.max(1, Math.round((24 * dur / 1000 - need) / len));
+    return new Promise(function (resolve) {
+      reel.anim = {
+        from: from, dist: need + cycles * len, start: performance.now(), dur: dur, stop: stop,
+        done: function () {
+          reel.anim = null;
+          reel.pos = stop;
+          reel.bounce = { start: performance.now(), dur: self.reducedMotion ? 90 : 230, target: stop };
+          reel.flash = 1;
+          if (self.hold) self.hold.spinningReels[index] = false;
+          if (self.onHoldReelStop) self.onHoldReelStop(index);
+          resolve();
+        }
+      };
+    });
   };
 
   Renderer.prototype.holdLand = function (index, value) {
     if (!this.hold) return;
     this.hold.board[index] = value;
-    this.hold.spinning[index] = false;
     this.hold.pop[index] = 1;
     var L = this.layout;
     var c = Math.floor(index / ROWS), r = index % ROWS;
+    /* 这一轴要是被填满了就彻底不再参与滚动 */
+    if (!this._reelHasFreeCell(c)) this.hold.spinningReels[c] = false;
     this.ring(c, r, "#ffd76a");
     this.burst(14, {
       x: L.originX + c * L.stepX + L.cellW / 2,
@@ -505,6 +545,77 @@
     return false;
   };
 
+  /* 画一条轴上正在滚动的图标。聚宝盆重转时会复用这支笔 ——
+   * 所以"能量满了之后"的转法和平常完全一样，只是锁定的钱币格被抠掉不参与滚动。 */
+  Renderer.prototype._drawReelStrip = function (ctx, c, opts) {
+    opts = opts || {};
+    var L = this.layout;
+    var reel = this.reels[c];
+    var strip = this.strips[c];
+    var len = strip.length;
+    var base = Math.floor(reel.pos);
+    var frac = reel.pos - base;
+    var x = L.originX + c * L.stepX;
+    var spotlight = opts.spotlight === undefined ? -1 : opts.spotlight;
+
+    /* 三档模糊：全速糊成一条，减速段软一点，一旦停下（含回弹）立刻清晰。
+     * 只在 anim 阶段用模糊图，避免停轮后残留一两帧糊影。 */
+    var bank = this.atlas;
+    if (reel.anim) bank = reel.speed > 9 ? this.blurAtlas : reel.speed > 2.2 ? this.softAtlas : this.atlas;
+
+    for (var r = -1; r <= ROWS; r++) {
+      var key = strip[mod(base + r, len)];
+      var y = L.viewTop + (r - frac) * L.stepY;
+      var img = bank[key];
+      if (!img) continue;
+
+      var visible = r >= 0 && r < ROWS && !reel.anim && !reel.bounce;
+      var isWin = visible && this._isHighlighted(c, r);
+      var alpha = 1;
+      if (this.dimOthers && visible && !isWin) alpha = 0.32;
+      if (spotlight >= 0 && c !== spotlight) alpha = Math.min(alpha, 0.34);
+      if (this.wildGrow[c] !== undefined && visible) alpha = 1;
+
+      ctx.globalAlpha = alpha;
+      if (isWin) {
+        /* 中奖格：放大一点 + 金色外发光 */
+        var pulse = 1 + Math.sin(this.highlight.t * 7) * 0.05;
+        ctx.save();
+        ctx.translate(x + L.cellW / 2, y + L.cellH / 2);
+        ctx.scale(pulse, pulse);
+        ctx.shadowColor = "rgba(255,214,110,.95)";
+        ctx.shadowBlur = L.cellW * 0.34;
+        ctx.drawImage(img, -L.cellW / 2, -L.cellH / 2, L.cellW, L.cellH);
+        ctx.shadowBlur = 0;
+        ctx.drawImage(img, -L.cellW / 2, -L.cellH / 2, L.cellW, L.cellH);
+        ctx.restore();
+      } else {
+        ctx.drawImage(img, x, y, L.cellW, L.cellH);
+      }
+      ctx.globalAlpha = 1;
+    }
+  };
+
+  /* 轴窗上下的渐隐：图标是"从机器里转出来、再转回机器里"的。
+   * 这一层是让滚轮看起来有厚度的关键。 */
+  Renderer.prototype._drawReelDepth = function (ctx, x) {
+    var L = this.layout;
+    var fade = L.viewH * 0.16;
+    var top = ctx.createLinearGradient(0, L.viewTop, 0, L.viewTop + fade);
+    top.addColorStop(0, "rgba(9,2,4,.92)");
+    top.addColorStop(0.55, "rgba(9,2,4,.35)");
+    top.addColorStop(1, "rgba(9,2,4,0)");
+    ctx.fillStyle = top;
+    ctx.fillRect(x, L.viewTop, L.cellW, fade);
+
+    var bot = ctx.createLinearGradient(0, L.viewTop + L.viewH - fade, 0, L.viewTop + L.viewH);
+    bot.addColorStop(0, "rgba(9,2,4,0)");
+    bot.addColorStop(0.45, "rgba(9,2,4,.35)");
+    bot.addColorStop(1, "rgba(9,2,4,.92)");
+    ctx.fillStyle = bot;
+    ctx.fillRect(x, L.viewTop + L.viewH - fade, L.cellW, fade);
+  };
+
   Renderer.prototype._drawReels = function (ctx, now) {
     var L = this.layout;
     /* 有轴在"顿停"时，其他轴压暗，把注意力全部推到那一轴上 */
@@ -513,14 +624,6 @@
 
     for (var c = 0; c < REELS; c++) {
       var reel = this.reels[c];
-      var strip = this.strips[c];
-      var len = strip.length;
-      var base = Math.floor(reel.pos);
-      var frac = reel.pos - base;
-      /* 三档模糊：全速糊成一条，减速段软一点，一旦停下（含回弹）立刻清晰。
-       * 只在 anim 阶段用模糊图，避免停轮后残留一两帧糊影。 */
-      var bank = this.atlas;
-      if (reel.anim) bank = reel.speed > 9 ? this.blurAtlas : reel.speed > 2.2 ? this.softAtlas : this.atlas;
       var x = L.originX + c * L.stepX;
 
       ctx.save();
@@ -534,39 +637,13 @@
         ctx.fillRect(x - 2, L.viewTop - 2, L.cellW + 4, L.viewH + 4);
       }
 
-      for (var r = -1; r <= ROWS; r++) {
-        var key = strip[mod(base + r, len)];
-        var y = L.viewTop + (r - frac) * L.stepY;
-        var img = bank[key];
-        if (!img) continue;
-
-        var visible = r >= 0 && r < ROWS && !reel.anim && !reel.bounce;
-        var isWin = visible && this._isHighlighted(c, r);
-        var alpha = 1;
-        if (this.dimOthers && visible && !isWin) alpha = 0.32;
-        if (spotlight >= 0 && c !== spotlight) alpha = Math.min(alpha, 0.34);
-        if (this.wildGrow[c] !== undefined && visible) alpha = 1;
-
-        ctx.globalAlpha = alpha;
-        if (isWin) {
-          /* 中奖格：放大一点 + 金色外发光 */
-          var pulse = 1 + Math.sin(this.highlight.t * 7) * 0.045;
-          ctx.save();
-          ctx.translate(x + L.cellW / 2, y + L.cellH / 2);
-          ctx.scale(pulse, pulse);
-          ctx.shadowColor = "rgba(255,214,110,.95)";
-          ctx.shadowBlur = L.cellW * 0.30;
-          ctx.drawImage(img, -L.cellW / 2, -L.cellH / 2, L.cellW, L.cellH);
-          ctx.restore();
-        } else {
-          ctx.drawImage(img, x, y, L.cellW, L.cellH);
-        }
-        ctx.globalAlpha = 1;
-      }
+      this._drawReelStrip(ctx, c, { spotlight: spotlight });
 
       /* 神龙整轴展开：一条竖向的金色龙柱盖住整轴 */
       var grow = this.wildGrow[c];
       if (grow > 0) this._drawWildColumn(ctx, c, grow);
+
+      this._drawReelDepth(ctx, x);
 
       /* 停轮瞬间的一道白闪 */
       if (reel.flash > 0.01) {
@@ -575,31 +652,40 @@
       }
       ctx.restore();
 
-      if (anticipating) {
-        ctx.save();
-        ctx.strokeStyle = "rgba(255,168,70," + (0.5 + Math.sin(now / 90) * 0.35) + ")";
-        ctx.lineWidth = 3;
-        ART.roundRect(ctx, x - 2, L.viewTop - 2, L.cellW + 4, L.viewH + 4, L.cellW * 0.14);
-        ctx.stroke();
-        ctx.restore();
-      }
-      /* 擦边球顿住的那一下：整轴打上炽白边框，"差一点就中了" */
-      if (reel.teasing) {
-        var beat = 0.55 + Math.sin(now / 48) * 0.45;
-        ctx.save();
-        ctx.strokeStyle = "rgba(255,248,220," + beat + ")";
-        ctx.lineWidth = 6;
-        ctx.shadowColor = "#ffd15c";
-        ctx.shadowBlur = 40;
-        ART.roundRect(ctx, x - 4, L.viewTop - 4, L.cellW + 8, L.viewH + 8, L.cellW * 0.16);
-        ctx.stroke();
-        ctx.strokeStyle = "rgba(255,150,70," + (beat * 0.7) + ")";
-        ctx.lineWidth = 2;
-        ctx.shadowBlur = 0;
-        ART.roundRect(ctx, x - 9, L.viewTop - 9, L.cellW + 18, L.viewH + 18, L.cellW * 0.18);
-        ctx.stroke();
-        ctx.restore();
-      }
+      this._drawReelFrame(ctx, c, now);
+    }
+  };
+
+  /* 期待 / 擦边球的边框，画在裁剪之外 */
+  Renderer.prototype._drawReelFrame = function (ctx, c, now) {
+    var L = this.layout;
+    var reel = this.reels[c];
+    var x = L.originX + c * L.stepX;
+
+    if (this.anticipation[c] && reel.anim) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(255,168,70," + (0.5 + Math.sin(now / 90) * 0.35) + ")";
+      ctx.lineWidth = 3;
+      ART.roundRect(ctx, x - 2, L.viewTop - 2, L.cellW + 4, L.viewH + 4, L.cellW * 0.14);
+      ctx.stroke();
+      ctx.restore();
+    }
+    /* 擦边球顿住的那一下：整轴打上炽白边框，"差一点就中了" */
+    if (reel.teasing) {
+      var beat = 0.55 + Math.sin(now / 48) * 0.45;
+      ctx.save();
+      ctx.strokeStyle = "rgba(255,248,220," + beat + ")";
+      ctx.lineWidth = 6;
+      ctx.shadowColor = "#ffd15c";
+      ctx.shadowBlur = 40;
+      ART.roundRect(ctx, x - 4, L.viewTop - 4, L.cellW + 8, L.viewH + 8, L.cellW * 0.16);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(255,150,70," + (beat * 0.7) + ")";
+      ctx.lineWidth = 2;
+      ctx.shadowBlur = 0;
+      ART.roundRect(ctx, x - 9, L.viewTop - 9, L.cellW + 18, L.viewH + 18, L.cellW * 0.18);
+      ctx.stroke();
+      ctx.restore();
     }
   };
 
@@ -665,67 +751,88 @@
 
   Renderer.prototype._drawHold = function (ctx, now) {
     var L = this.layout;
+
     for (var c = 0; c < REELS; c++) {
-      for (var r = 0; r < ROWS; r++) {
-        var index = c * ROWS + r;
-        var rect = this._cellRect(c, r);
-        var value = this.hold.board[index];
+      var x = L.originX + c * L.stepX;
+      var freeRows = [];
+      for (var r = 0; r < ROWS; r++) if (!this.hold.board[c * ROWS + r]) freeRows.push(r);
 
-        if (value) {
-          var pop = this.hold.pop[index];
-          var scale = 1 + pop * 0.22;
+      if (freeRows.length && this.hold.spinningReels[c]) {
+        /* 这一轴还有空位且正在转：用和普通游戏一模一样的滚轮，
+         * 但只在"没被钱币锁住"的格子里显示 —— 锁定的钱币纹丝不动。 */
+        ctx.save();
+        /* 多个格子要并成一块裁剪区，所以用只追加子路径的 roundRectPath；
+         * roundRect 自己会 beginPath，连着调只会留下最后一个矩形。 */
+        ctx.beginPath();
+        for (var i = 0; i < freeRows.length; i++) {
+          var fr = this._cellRect(c, freeRows[i]);
+          ART.roundRectPath(ctx, fr.x, fr.y, fr.w, fr.h, fr.w * 0.13);
+        }
+        ctx.clip();
+        this._drawReelStrip(ctx, c, {});
+        this._drawReelDepth(ctx, x);
+        ctx.restore();
+      } else {
+        /* 没在转：空位画成暗格，让"还差几个"一目了然 */
+        for (var k = 0; k < freeRows.length; k++) {
+          var er = this._cellRect(c, freeRows[k]);
           ctx.save();
-          /* 锁定格的底板自己画，好让金色更亮 */
-          ART.roundRect(ctx, rect.x, rect.y, rect.w, rect.h, rect.w * 0.13);
-          var g = ctx.createLinearGradient(0, rect.y, 0, rect.y + rect.h);
-          g.addColorStop(0, "#5c3f0a");
-          g.addColorStop(0.55, "#402a05");
-          g.addColorStop(1, "#271903");
-          ctx.fillStyle = g;
-          ctx.fill();
-          ctx.lineWidth = 2;
-          ctx.strokeStyle = "rgba(255,214,110,.85)";
-          ctx.shadowColor = "rgba(255,200,80,.7)";
-          ctx.shadowBlur = rect.w * 0.2;
-          ctx.stroke();
-          ctx.shadowBlur = 0;
-
-          ctx.translate(rect.x + rect.w / 2, rect.y + rect.h / 2);
-          ctx.scale(scale, scale);
-          /* 用无底板、无小字的图标，免得"招财"两个字和面值叠在一起 */
-          var icon = this.iconAtlas && this.iconAtlas.C;
-          if (icon) ctx.drawImage(icon, -rect.w / 2, -rect.h * 0.60, rect.w, rect.h);
-          ctx.font = "800 " + Math.round(rect.h * 0.24) + "px system-ui,'Microsoft YaHei',sans-serif";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.lineWidth = Math.max(3, rect.h * 0.05);
-          ctx.strokeStyle = "rgba(34,5,7,.95)";
-          ctx.fillStyle = "#fff3c4";
-          var text = value + "×";
-          ctx.strokeText(text, 0, rect.h * 0.33);
-          ctx.fillText(text, 0, rect.h * 0.33);
-          ctx.restore();
-        } else {
-          ctx.save();
-          ART.roundRect(ctx, rect.x, rect.y, rect.w, rect.h, rect.w * 0.13);
-          ctx.fillStyle = "rgba(24,8,10,.82)";
+          ART.roundRect(ctx, er.x, er.y, er.w, er.h, er.w * 0.13);
+          ctx.fillStyle = "rgba(20,6,8,.88)";
           ctx.fill();
           ctx.lineWidth = 1.5;
-          ctx.strokeStyle = "rgba(232,182,64,.22)";
+          ctx.strokeStyle = "rgba(232,182,64,.18)";
           ctx.stroke();
-          if (this.hold.spinning[index]) {
-            /* 空位在转：一圈跑动的光弧 */
-            var a = now / 220 + index;
-            ctx.beginPath();
-            ctx.arc(rect.x + rect.w / 2, rect.y + rect.h / 2, rect.w * 0.22, a, a + 1.5);
-            ctx.strokeStyle = "rgba(255,214,110,.75)";
-            ctx.lineWidth = Math.max(2, rect.w * 0.035);
-            ctx.stroke();
-          }
           ctx.restore();
         }
       }
+
+      /* 锁定的钱币画在最上面，位置固定不动 */
+      for (var rr = 0; rr < ROWS; rr++) {
+        var index = c * ROWS + rr;
+        if (!this.hold.board[index]) continue;
+        this._drawLockedCoin(ctx, c, rr, this.hold.board[index], this.hold.pop[index], now);
+      }
     }
+  };
+
+  Renderer.prototype._drawLockedCoin = function (ctx, c, r, value, pop, now) {
+    var rect = this._cellRect(c, r);
+    var big = value >= 10;
+    var scale = 1 + pop * 0.24;
+
+    ctx.save();
+    /* 锁定格的底板自己画，好让金色更亮；大面值换成更烫的红金底 */
+    ART.roundRect(ctx, rect.x, rect.y, rect.w, rect.h, rect.w * 0.13);
+    var g = ctx.createLinearGradient(0, rect.y, 0, rect.y + rect.h);
+    if (big) {
+      g.addColorStop(0, "#8e2a12"); g.addColorStop(0.5, "#5e1a0b"); g.addColorStop(1, "#330d05");
+    } else {
+      g.addColorStop(0, "#6b4a0c"); g.addColorStop(0.55, "#472e05"); g.addColorStop(1, "#2a1b03");
+    }
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.lineWidth = big ? 3 : 2;
+    ctx.strokeStyle = big ? "#fff0b8" : "rgba(255,214,110,.9)";
+    ctx.shadowColor = big ? "rgba(255,150,60,.95)" : "rgba(255,200,80,.7)";
+    ctx.shadowBlur = rect.w * (big ? 0.34 : 0.2) * (1 + (big ? Math.sin(now / 220) * 0.3 : 0));
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    ctx.translate(rect.x + rect.w / 2, rect.y + rect.h / 2);
+    ctx.scale(scale, scale);
+    /* 用无底板、无小字的图标，免得"招财"两个字和面值叠在一起 */
+    var icon = this.iconAtlas && this.iconAtlas.C;
+    if (icon) ctx.drawImage(icon, -rect.w / 2, -rect.h * 0.60, rect.w, rect.h);
+    ctx.font = "800 " + Math.round(rect.h * (big ? 0.27 : 0.24)) + "px system-ui,'Microsoft YaHei',sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.lineWidth = Math.max(3, rect.h * 0.055);
+    ctx.strokeStyle = "rgba(30,4,6,.95)";
+    ctx.strokeText(value + "×", 0, rect.h * 0.33);
+    ctx.fillStyle = big ? "#fff6d0" : "#ffe9a8";
+    ctx.fillText(value + "×", 0, rect.h * 0.33);
+    ctx.restore();
   };
 
   Renderer.prototype._drawRings = function (ctx) {

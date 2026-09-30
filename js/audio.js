@@ -56,6 +56,22 @@
     this.musicBus = ctx.createGain();
     this.musicBus.gain.value = 0.32;
 
+    /* 每条轴一个声像位置：第 1 轴偏左、第 5 轴偏右。
+     * 停轮声从左扫到右，这一下比任何混响都更能让机台"变宽"。 */
+    this.reelBus = [];
+    for (var i = 0; i < 5; i++) {
+      var g = ctx.createGain();
+      if (ctx.createStereoPanner) {
+        var pan = ctx.createStereoPanner();
+        pan.pan.value = -0.62 + i * 0.31;
+        g.connect(pan);
+        pan.connect(this.sfxBus);
+      } else {
+        g.connect(this.sfxBus);
+      }
+      this.reelBus.push(g);
+    }
+
     /* 程序生成的混响脉冲响应：指数衰减噪声 + 轻微低通 */
     this.reverb = ctx.createConvolver();
     this.reverb.buffer = this._makeImpulse(2.4, 2.6);
@@ -270,7 +286,7 @@
     var g = ctx.createGain();
     g.gain.setValueAtTime(vol, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + (opts.dur || 0.075));
-    src.connect(bp); bp.connect(g); g.connect(this.sfxBus);
+    src.connect(bp); bp.connect(g); g.connect(opts.bus || this.sfxBus);
     src.start(t);
   };
 
@@ -433,10 +449,15 @@
     } catch (err) { /* 已经停过了 */ }
   };
 
-  /* 停轮：五声音阶逐轮上行，配一记木鱼。 */
+  /* 停轮：五声音阶逐轮上行，配一记木鱼。
+   * 走对应轴的声像总线 —— 声音跟着眼睛从左扫到右。 */
   AudioEngine.prototype.reelStop = function (index, hot) {
-    this.woodblock({ freq: 900 + index * 120, vol: hot ? 0.24 : 0.16 });
-    this.pluck(note(index, hot ? 4 : 3), { dur: hot ? 0.9 : 0.42, vol: hot ? 0.26 : 0.16 });
+    if (!this.ready) return;
+    var bus = this.reelBus && this.reelBus[index] ? this.reelBus[index] : this.sfxBus;
+    this.woodblock({ freq: 900 + index * 120, vol: hot ? 0.26 : 0.18, bus: bus });
+    this.pluck(note(index, hot ? 4 : 3), { dur: hot ? 0.9 : 0.42, vol: hot ? 0.26 : 0.16, bus: bus });
+    /* 落轴的"咚"：短促的低频，给停轮一点重量 */
+    this.drum({ freq: 220 - index * 12, vol: hot ? 0.24 : 0.14, dur: 0.16, bus: bus });
   };
 
   /* 关键轮期待：上行滑音 + 心跳鼓。level 越高越紧张。 */
@@ -602,22 +623,45 @@
     }
   };
 
+  /* 前瞻式调度：每 25ms 醒一次，把接下来 200ms 内要响的音都排进去。
+   * 四小节一个循环，走 宫 → 羽 → 徵 → 商 的和声，比单调琶音耐听得多。 */
+  var CHORDS = [0, 4, 3, 1];
+  var ARP = [0, 2, 4, 2, 3, 1, 4, 2];
+
   AudioEngine.prototype._schedule = function () {
     if (!this.ready || !this.musicOn) return;
     var ctx = this.ctx;
-    var beat = this.intensity > 0.5 ? 0.30 : 0.42;
+    var hot = this.intensity > 0.5;
+    var beat = hot ? 0.28 : 0.40;
+
     while (this._nextNoteAt < ctx.currentTime + 0.2) {
       var t = this._nextNoteAt;
       var step = this._step;
       var bar = Math.floor(step / 8);
-      /* 琶音走 宫-徵-角-羽 的循环，第 4 小节换个起点避免听腻 */
-      var pattern = [0, 2, 4, 2, 3, 1, 4, 2];
-      var degree = pattern[step % 8] + (bar % 4 === 3 ? 2 : 0);
-      this._musicNote(note(degree, step % 8 === 0 ? 5 : 4), t, beat);
-      if (step % 8 === 0) this._musicPad(note(0, 2), t, beat * 8);
-      if (this.intensity > 0.5 && step % 2 === 0) {
-        this.drum({ delay: t - ctx.currentTime, freq: step % 8 === 0 ? 120 : 96, vol: 0.13, dur: 0.25 });
+      var inBar = step % 8;
+      var root = CHORDS[bar % CHORDS.length];
+
+      /* 琶音：主旋律层 */
+      this._musicNote(note(root + ARP[inBar], inBar === 0 ? 5 : 4), t, beat);
+
+      /* 低音：每小节的 1 和 5 拍，撑住底 */
+      if (inBar === 0 || inBar === 4) {
+        this._musicBass(note(root, 2), t, beat * (inBar === 0 ? 4 : 3.4));
       }
+
+      /* 垫：整小节 */
+      if (inBar === 0) this._musicPad(note(root, 3), t, beat * 8);
+
+      /* 笛子对句：只在每两小节的后半段冒出来，留白才好听 */
+      if (bar % 2 === 1 && inBar >= 4) {
+        this._musicFlute(note(root + ARP[(inBar + 3) % 8] + 2, 5), t, beat * 1.6);
+      }
+
+      /* 免费游戏 / 聚宝盆：加一层鼓，速度也更快 */
+      if (hot && inBar % 2 === 0) {
+        this.drum({ delay: t - ctx.currentTime, freq: inBar === 0 ? 118 : 94, vol: 0.14, dur: 0.24 });
+      }
+
       this._nextNoteAt += beat;
       this._step++;
     }
@@ -634,17 +678,75 @@
     lp.frequency.exponentialRampToValueAtTime(freq * 1.5, t + beat);
     var g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.1, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.095, t + 0.01);
     g.gain.exponentialRampToValueAtTime(0.0001, t + beat * 1.6);
     osc.connect(lp); lp.connect(g); g.connect(this.musicBus);
     osc.start(t); osc.stop(t + beat * 1.8);
+  };
+
+  /* 低音：正弦为主、加一点三角波泛音，短促有弹性 */
+  AudioEngine.prototype._musicBass = function (freq, t, dur) {
+    var ctx = this.ctx;
+    var g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.13, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.04, t + dur * 0.4);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    var lp = ctx.createBiquadFilter();
+    lp.type = "lowpass"; lp.frequency.value = 360;
+    lp.connect(g); g.connect(this.musicBus);
+    [[1, "sine", 1], [2, "triangle", 0.3]].forEach(function (p) {
+      var osc = ctx.createOscillator();
+      osc.type = p[1];
+      osc.frequency.value = freq * p[0];
+      var og = ctx.createGain();
+      og.gain.value = p[2];
+      osc.connect(og); og.connect(lp);
+      osc.start(t); osc.stop(t + dur + 0.1);
+    });
+  };
+
+  /* 笛子对句：正弦 + 轻颤音，起音慢一点，像有人在远处吹 */
+  AudioEngine.prototype._musicFlute = function (freq, t, dur) {
+    var ctx = this.ctx;
+    var osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(freq * 0.995, t);
+    osc.frequency.linearRampToValueAtTime(freq, t + 0.08);
+
+    var vib = ctx.createOscillator();
+    vib.type = "sine";
+    vib.frequency.value = 5.2;
+    var vibGain = ctx.createGain();
+    vibGain.gain.value = freq * 0.006;
+    vib.connect(vibGain); vibGain.connect(osc.frequency);
+
+    var breath = ctx.createBufferSource();
+    breath.buffer = this._noiseBuffer(Math.max(0.1, dur));
+    var bf = ctx.createBiquadFilter();
+    bf.type = "bandpass"; bf.frequency.value = freq * 2; bf.Q.value = 1.4;
+    var bg = ctx.createGain();
+    bg.gain.setValueAtTime(0.012, t);
+    bg.gain.exponentialRampToValueAtTime(0.0002, t + dur * 0.6);
+
+    var g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.055, t + 0.09);
+    g.gain.setValueAtTime(0.055, t + dur * 0.5);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+
+    osc.connect(g); breath.connect(bf); bf.connect(bg); bg.connect(g);
+    g.connect(this.musicBus);
+    osc.start(t); osc.stop(t + dur + 0.1);
+    vib.start(t); vib.stop(t + dur + 0.1);
+    breath.start(t);
   };
 
   AudioEngine.prototype._musicPad = function (freq, t, dur) {
     var ctx = this.ctx;
     var g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.055, t + dur * 0.3);
+    g.gain.exponentialRampToValueAtTime(0.05, t + dur * 0.3);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     var lp = ctx.createBiquadFilter();
     lp.type = "lowpass"; lp.frequency.value = 520;

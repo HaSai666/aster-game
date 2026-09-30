@@ -25,14 +25,18 @@
   function lighten(hex, t) { return rgbStr(mix(hex, "#ffffff", t)); }
   function darken(hex, t) { return rgbStr(mix(hex, "#1a0607", t)); }
 
-  /* 金属渐变：亮 → 本色 → 暗 → 回弹一点亮，这一下"回弹"是金属感的来源。 */
+  /* 金属渐变：亮 → 一道窄高光 → 本色 → 暗 → 底部回弹一点亮。
+   * 那道窄高光（0.30–0.36）和底部的回弹是"金属"与"塑料"的分界线。 */
   function metal(ctx, size, color, accent) {
-    var g = ctx.createLinearGradient(0, -size * 0.5, 0, size * 0.5);
-    g.addColorStop(0, lighten(accent || color, 0.55));
-    g.addColorStop(0.28, lighten(color, 0.18));
-    g.addColorStop(0.52, color);
-    g.addColorStop(0.74, darken(color, 0.42));
-    g.addColorStop(1, lighten(color, 0.1));
+    var g = ctx.createLinearGradient(-size * 0.18, -size * 0.5, size * 0.18, size * 0.5);
+    g.addColorStop(0, lighten(accent || color, 0.62));
+    g.addColorStop(0.22, lighten(color, 0.22));
+    g.addColorStop(0.30, lighten(accent || color, 0.78));   // 镜面窄带
+    g.addColorStop(0.38, lighten(color, 0.12));
+    g.addColorStop(0.58, color);
+    g.addColorStop(0.80, darken(color, 0.48));
+    g.addColorStop(0.93, darken(color, 0.30));
+    g.addColorStop(1, lighten(color, 0.16));                // 底部环境反光
     return g;
   }
 
@@ -57,15 +61,20 @@
     ctx.stroke();
   }
 
-  function roundRect(ctx, x, y, w, h, r) {
+  /* 只追加子路径、不 beginPath —— 需要把多个矩形并成一个裁剪区时用这个。 */
+  function roundRectPath(ctx, x, y, w, h, r) {
     var rr = Math.min(r, w / 2, h / 2);
-    ctx.beginPath();
     ctx.moveTo(x + rr, y);
     ctx.arcTo(x + w, y, x + w, y + h, rr);
     ctx.arcTo(x + w, y + h, x, y + h, rr);
     ctx.arcTo(x, y + h, x, y, rr);
     ctx.arcTo(x, y, x + w, y, rr);
     ctx.closePath();
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    roundRectPath(ctx, x, y, w, h, r);
   }
 
   /* 顶部弧形高光，给平面图形一点"鼓起来"的错觉。 */
@@ -694,10 +703,15 @@
     /* 投影加在合成这一步，只跟着剪影走，不会在图标内部到处结块 */
     var box = size / MARGIN;
     ctx.save();
-    ctx.shadowColor = "rgba(0,0,0,.65)";
-    ctx.shadowBlur = size * 0.09;
-    ctx.shadowOffsetY = size * 0.035;
+    /* 先把剪影往下压一层暗影，再往上错半像素描一层暖光当轮廓光 */
+    ctx.shadowColor = "rgba(0,0,0,.7)";
+    ctx.shadowBlur = size * 0.1;
+    ctx.shadowOffsetY = size * 0.04;
     ctx.drawImage(scratch, -box / 2, -box / 2, box, box);
+    ctx.shadowColor = "transparent";
+    ctx.globalAlpha = 0.28;
+    ctx.globalCompositeOperation = "lighter";
+    ctx.drawImage(scratch, -box / 2, -box / 2 - size * 0.012, box, box);
     ctx.restore();
   }
 
@@ -723,14 +737,39 @@
     ctx.lineWidth = Math.max(1, w * 0.012);
     ctx.strokeStyle = opts.special ? "rgba(232,182,64,.55)" : "rgba(232,182,64,.22)";
     ctx.stroke();
+    /* 中心微微提亮：图标站在一小片光里，剪影会更立体 */
+    var pool = ctx.createRadialGradient(w * 0.5, h * 0.44, 0, w * 0.5, h * 0.44, w * 0.62);
+    pool.addColorStop(0, opts.special ? "rgba(255,210,130,.16)" : "rgba(255,200,140,.10)");
+    pool.addColorStop(1, "rgba(0,0,0,0)");
+    roundRect(ctx, 0, 0, w, h, r);
+    ctx.fillStyle = pool;
+    ctx.fill();
+
+    /* 内斜角：顶边一道亮、底边一道暗，格子就"凹"下去了 */
+    ctx.save();
+    roundRect(ctx, 0, 0, w, h, r);
+    ctx.clip();
+    ctx.lineWidth = Math.max(1.5, h * 0.022);
+    ctx.strokeStyle = "rgba(255,225,170,.16)";
+    ctx.beginPath();
+    ctx.moveTo(r * 0.7, ctx.lineWidth * 0.5);
+    ctx.lineTo(w - r * 0.7, ctx.lineWidth * 0.5);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(0,0,0,.55)";
+    ctx.beginPath();
+    ctx.moveTo(r * 0.7, h - ctx.lineWidth * 0.5);
+    ctx.lineTo(w - r * 0.7, h - ctx.lineWidth * 0.5);
+    ctx.stroke();
+    ctx.restore();
+
     /* 外框 */
     roundRect(ctx, 0.5, 0.5, w - 1, h - 1, r);
     ctx.lineWidth = 1;
-    ctx.strokeStyle = "rgba(0,0,0,.6)";
+    ctx.strokeStyle = "rgba(0,0,0,.7)";
     ctx.stroke();
     /* 顶部一道漆光 */
     var gloss = ctx.createLinearGradient(0, 0, 0, h * 0.45);
-    gloss.addColorStop(0, "rgba(255,255,255,.09)");
+    gloss.addColorStop(0, "rgba(255,255,255,.11)");
     gloss.addColorStop(1, "rgba(255,255,255,0)");
     roundRect(ctx, w * 0.04, h * 0.035, w * 0.92, h * 0.4, r * 0.7);
     ctx.fillStyle = gloss;
@@ -741,6 +780,7 @@
     drawSymbol: drawSymbol,
     drawPlate: drawPlate,
     roundRect: roundRect,
+    roundRectPath: roundRectPath,
     metal: metal,
     goldMetal: goldMetal,
     lighten: lighten,

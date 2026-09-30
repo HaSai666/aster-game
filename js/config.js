@@ -28,15 +28,17 @@
 
   /* 每条 way 的赔付倍数（× 单次下注）。
    * 数值小是 243 Ways 的正常量级：实际赔付 = 这里的值 × Ways 数（最高 243）。
-   * 这一组是把结构定死后用 tools/sim.html 反解出来的，整体线性缩放到 RTP 95%。 */
+   * 这一组是把结构定死后用 tools/sim.html 反解出来的。
+   * 基础游戏刻意压得比较薄（只占 RTP 的三成），省下来的份额全部押在
+   * 龙门免费游戏和聚宝盆上 —— 让"进玩法"这件事真的值得期待。 */
   var PAYS = {
-    CN: { 3: 0.03, 4: 0.09, 5: 0.32 },
-    FU: { 3: 0.05, 4: 0.15, 5: 0.48 },
-    LT: { 3: 0.07, 4: 0.21, 5: 0.75 },
-    JD: { 3: 0.09, 4: 0.30, 5: 1.15 },
-    KO: { 3: 0.15, 4: 0.48, 5: 2.10 },
-    YB: { 3: 0.30, 4: 1.05, 5: 4.60 },
-    PX: { 3: 0.65, 4: 2.40, 5: 13.0 }
+    CN: { 3: 0.020, 4: 0.051, 5: 0.187 },
+    FU: { 3: 0.031, 4: 0.093, 5: 0.270 },
+    LT: { 3: 0.041, 4: 0.112, 5: 0.400 },
+    JD: { 3: 0.051, 4: 0.177, 5: 0.650 },
+    KO: { 3: 0.093, 4: 0.280, 5: 1.080 },
+    YB: { 3: 0.177, 4: 0.600, 5: 2.320 },
+    PX: { 3: 0.380, 4: 1.380, 5: 6.250 }
   };
 
   /* 金锣 = Scatter，落在任意位置即计数；同时给一笔即时赔付。 */
@@ -99,38 +101,59 @@
     },
     /* --- 龙门免费游戏 --- */
     freeSpins: {
-      trigger: { 3: 8, 4: 12, 5: 18 },
+      trigger: { 3: 9, 4: 14, 5: 20 },
       retrigger: { scatters: 3, spins: 5 },
-      startMultiplier: 2,
+      startMultiplier: 4,
       stepPerWin: 1,
-      maxMultiplier: 5
+      maxMultiplier: 8
     },
     /* --- 隐藏能量条 → 聚宝盆（Hold & Spin） --- */
     charge: {
-      max: 42,                // 玩家看不到这个数字，只看得到条的长度与光效
+      max: 60,                // 玩家看不到这个数字，只看得到条的长度与光效
       perCoin: 1,             // 基础游戏每枚招财钱币
       perCoinFree: 2,         // 免费游戏中翻倍
       warnAt: 0.78            // 超过这个比例开始"快满了"的视觉/听觉暗示
     },
     holdSpin: {
       respins: 3,             // 初始重转次数；每次落新币重置
-      landChance: 0.058,      // 每个空位每次重转的落币概率
+      landChance: 0.065,      // 每个空位每次重转的落币概率
       grandPay: 200,          // 15 格全满额外奖励（× 下注）
       manual: true,           // 每一次重转都由玩家自己按
       spinMs: 1600,           // 单次重转的转动时长
       spinMsStep: 280,        // 每多转一次再长一点，紧张感递增
       spinMsMax: 3600,
       values: [               // 单枚钱币面值（× 下注）与权重
-        { value: 1, weight: 68 },
-        { value: 2, weight: 20 },
-        { value: 3, weight: 6 },
-        { value: 5, weight: 3 },
-        { value: 10, weight: 2 },
-        { value: 20, weight: 1 }
+        { value: 1, weight: 38 },
+        { value: 2, weight: 26 },
+        { value: 3, weight: 15 },
+        { value: 5, weight: 11 },
+        { value: 10, weight: 6 },
+        { value: 25, weight: 3 },
+        { value: 100, weight: 1 }
       ]
     },
     /* 免费游戏是否由玩家手动逐次按（关掉就是自动连转） */
     manualFreeSpins: true,
+    /* --- 累积彩金 ---
+     * 每次付费旋转把下注的 contribution 投进可见奖池、reseed 投进隐藏储备。
+     * 命中时整池带走，再从储备里垫出 seed 作为新的底金 —— 这样"命中后不归零"
+     * 的底金也是玩家自己投进去的，长期 RTP 恰好等于 contribution + reseed。
+     * （第一版直接用固定 seed 重置，等于每次命中白送一笔，实测 RTP 冲到 99.4%。）*/
+    jackpot: {
+      contribution: 0.020,   // 进可见奖池
+      reseed: 0.005,         // 进隐藏储备，命中后用来垫底金
+      seed: 250,             // 命中后奖池回落到的底金（从储备里出）
+      initial: 2000,         // 首次开局的初始池（一次性，长期可忽略）
+      chance: 1 / 2500,      // 每次付费旋转的随机触发
+      onTripleDragon: true   // 三龙聚顶必中
+    },
+    /* --- 购买龙门（bonus buy）---
+     * 价格按免费游戏的实测平均产出定，让购买的 RTP 和基础游戏基本一致。
+     * 档位权重复制自然触发的分布，所以买到的和撞到的是同一个东西。 */
+    buyFeature: {
+      price: 50,
+      tierWeights: { 3: 950, 4: 48, 5: 2 }
+    },
     /* 擦边球：最后一轴先"差一点点"停住、顿一下再爬到位。
      * chance 是在没有真实机会时也照样吊一下的概率。 */
     tease: {
@@ -138,6 +161,42 @@
       chance: 0.22,
       onScatter: true,        // 已落 2 个金锣时必定吊
       onTopSymbol: true       // 前两轴都有貔貅时也吊
+    }
+  };
+
+  /* ---------------- 局外成长（不参与 RTP）----------------
+   * 等级、任务、签到发的都是"金库"里的虚拟金币，属于水龙头，
+   * 和老虎机本身的赔付是两套账，不要混在一起算。 */
+  var META = {
+    /* 每次旋转获得的经验 = 下注额 */
+    level: {
+      /* 升到第 n+1 级需要的经验 */
+      curve: function (n) { return Math.round(400 * Math.pow(n, 1.5)); },
+      reward: function (n) { return 500 * n; },
+      /* 下注档位解锁等级 */
+      betUnlock: { 100: 4, 250: 8 },
+      maxLevel: 99
+    },
+    daily: {
+      rewards: [1500, 2200, 3200, 4500, 6500, 9500, 18000],
+      cycle: 7
+    },
+    /* 任务池。target 从 targets 里随机取一档，奖励按难度线性给。 */
+    missions: {
+      active: 3,
+      pool: [
+        { key: "spins", label: "旋转 {n} 次", targets: [20, 40, 80], coin: 6, xp: 4 },
+        { key: "wager", label: "累计下注 ${n}", targets: [1500, 4000, 10000], coin: 0.3, xp: 0.2 },
+        { key: "won", label: "累计赢得 ${n}", targets: [2500, 7000, 18000], coin: 0.18, xp: 0.12 },
+        { key: "dragons", label: "让神龙展开 {n} 次", targets: [3, 6, 12], coin: 45, xp: 30 },
+        { key: "coins", label: "收集 {n} 枚招财钱币", targets: [10, 25, 50], coin: 13, xp: 9 },
+        { key: "scatters", label: "落下 {n} 个金锣", targets: [8, 20, 40], coin: 15, xp: 10 },
+        { key: "frees", label: "触发 {n} 次龙门免费游戏", targets: [1, 2], coin: 450, xp: 260 },
+        { key: "holds", label: "触发 {n} 次聚宝盆", targets: [1, 2], coin: 350, xp: 200 },
+        { key: "bestX", label: "单次旋转赢得 {n} 倍下注", targets: [10, 25, 50], coin: 17, xp: 11 },
+        { key: "wins", label: "中奖 {n} 次", targets: [10, 20, 40], coin: 13, xp: 9 },
+        { key: "streak", label: "达成 {n} 连胜", targets: [3, 5, 8], coin: 75, xp: 48 }
+      ]
     }
   };
 
@@ -154,14 +213,14 @@
   ];
 
   var ECONOMY = {
-    startingWallet: 10000,
-    topUp: 5000,
-    bets: [5, 10, 20, 50, 100],
-    defaultBet: 10,
+    startingWallet: 20000,
+    topUp: 10000,
+    bets: [10, 25, 50, 100, 250],
+    defaultBet: 25,
     buyins: [
-      { amount: 600, title: "小试身手", note: "60 转起步" },
-      { amount: 2500, title: "登堂入室", note: "撑得住一次免费游戏" },
-      { amount: 10000, title: "一掷千金", note: "完整体验所有玩法" }
+      { amount: 1000, title: "小试身手", note: "约 40 转" },
+      { amount: 3000, title: "登堂入室", note: "约 120 转，够撞一次玩法" },
+      { amount: 12000, title: "一掷千金", note: "完整体验所有玩法" }
     ]
   };
 
@@ -341,6 +400,7 @@
     STACKS: STACKS,
     STRIPS: STRIPS,
     FEATURES: FEATURES,
+    META: META,
     WIN_TIERS: WIN_TIERS,
     ECONOMY: ECONOMY,
     buildStripSet: buildStripSet

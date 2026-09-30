@@ -191,6 +191,33 @@
     this.freeMultiplier = 1;
     this.freeWon = 0;
     this.mode = "base";
+    this.jackpot = F.jackpot.initial;
+    this.jackpotReserve = 0;
+    this.boughtFeature = false;
+  };
+
+  /* 购买龙门：按自然触发的档位分布掷一个，然后直接进免费游戏。
+   * 价格在 config 里，定成和免费游戏实测平均产出基本持平。 */
+  SlotEngine.prototype.buyFreeSpins = function () {
+    var weights = F.buyFeature.tierWeights;
+    var keys = Object.keys(weights);
+    var total = 0, i;
+    for (i = 0; i < keys.length; i++) total += weights[keys[i]];
+    var roll = this.rng() * total;
+    var tier = keys[0];
+    for (i = 0; i < keys.length; i++) {
+      roll -= weights[keys[i]];
+      if (roll <= 0) { tier = keys[i]; break; }
+    }
+    var spins = F.freeSpins.trigger[tier];
+    this.mode = "free";
+    this.freeSpins = spins;
+    this.freeTotal = spins;
+    this.freeIndex = 0;
+    this.freeMultiplier = F.freeSpins.startMultiplier;
+    this.freeWon = 0;
+    this.boughtFeature = true;
+    return { scatters: Number(tier), spins: spins };
   };
 
   SlotEngine.prototype.snapshot = function () {
@@ -203,6 +230,7 @@
       freeIndex: this.freeIndex,
       freeMultiplier: this.freeMultiplier,
       freeWon: this.freeWon,
+      jackpot: this.jackpot,
       mode: this.mode
     };
   };
@@ -212,6 +240,11 @@
     var rng = this.rng;
     var isFree = this.mode === "free";
     var strips = isFree ? this.strips.free : this.strips.base;
+    /* 只有付费旋转才往彩金池和储备里投钱 */
+    if (!isFree) {
+      this.jackpot += bet * F.jackpot.contribution;
+      this.jackpotReserve += bet * F.jackpot.reseed;
+    }
     var spun = spinGrid(strips, rng);
     var grid = spun.grid;
 
@@ -260,7 +293,10 @@
     var scatterPay = tableLookup(CONFIG.SCATTER_PAY, effectiveScatters) * bet;
     var coinPay = tableLookup(CONFIG.COIN_PAY, coinCount) * bet;
 
+    /* 取整到"分"以上：基础赔率只有零点零几，不取整会出现赢了却显示 $0 的情况。
+     * 只要赢了就至少给 1，对 RTP 的影响可以忽略。 */
     var spinWin = ways.total + scatterPay + coinPay;
+    if (spinWin > 0) spinWin = Math.max(1, Math.round(spinWin));
 
     /* 5. 能量条 */
     var chargeBefore = this.charge;
@@ -301,7 +337,22 @@
       totalWin = cap;
       capped = true;
     }
-    if (isFree) this.freeWon += hold ? hold.total : 0;
+
+    /* 累积彩金。整池带走后重新回到底金。彩金是独立奖项，不受单转封顶约束。 */
+    var jackpotHit = false;
+    var jackpotWin = 0;
+    if ((F.jackpot.onTripleDragon && combos.indexOf("tripleDragon") >= 0) ||
+        (!isFree && rng() < F.jackpot.chance)) {
+      jackpotHit = true;
+      jackpotWin = Math.round(this.jackpot);
+      /* 新的底金从储备里出，储备不够就少垫一点 */
+      var newSeed = Math.min(this.jackpotReserve, F.jackpot.seed);
+      this.jackpotReserve -= newSeed;
+      this.jackpot = newSeed;
+    }
+    totalWin += jackpotWin;
+
+    if (isFree) this.freeWon += (hold ? hold.total : 0) + jackpotWin;
 
     /* 8. 免费游戏状态收尾 —— 聚宝盆结束后才判断是否退出 */
     var freeEnded = false;
@@ -339,6 +390,7 @@
       coinPay: coinPay,
       spinWin: spinWin,
       hold: hold,
+      jackpot: { hit: jackpotHit, win: jackpotWin, pot: this.jackpot },
       totalWin: totalWin,
       capped: capped,
       tier: winTier(totalWin, bet),
