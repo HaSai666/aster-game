@@ -1,7 +1,7 @@
 /* ------------------------------------------------------------------
  * 金龙聚宝 · 游戏主程序
- * 负责把引擎算出来的结果"演"出来：停轮节奏、神龙展开、钱币入账、
- * 分级大奖、免费游戏、聚宝盆，以及所有按钮的即时反馈。
+ * 负责把引擎算出来的结果"演"出来：停轮节奏、擦边球、神龙展开、钱币入账、
+ * 分级大奖、手动免费游戏、手动聚宝盆，以及所有按钮的即时反馈。
  * ------------------------------------------------------------------ */
 (function () {
   "use strict";
@@ -27,12 +27,12 @@
   [
     "wallet", "session", "bet-value", "mode-label", "spin-count",
     "charge-track", "charge-fill", "charge-state",
-    "reel-canvas", "stage", "result-line",
+    "reel-canvas", "stage", "result-line", "fx-canvas",
     "banner", "banner-title", "banner-amount", "banner-sub",
     "feature-card", "feature-title", "feature-sub", "feature-meta",
     "hold-hud", "hold-respins", "hold-total",
     "free-hud", "free-remaining", "free-multiplier", "free-total",
-    "spin-btn", "spin-label", "bet-down", "bet-up", "auto-btn", "auto-label",
+    "spin-btn", "spin-label", "spin-hint", "bet-down", "bet-up", "auto-btn", "auto-label",
     "auto-select", "turbo-btn", "turbo-state", "collect-btn",
     "sound-btn", "music-btn", "settings-btn", "paytable-btn",
     "buyin-modal", "buyin-options", "buyin-wallet", "topup-btn",
@@ -57,15 +57,18 @@
 
   var state = load();
   var session = 0;
-  var phase = "idle";            // idle | spinning | presenting | hold | free
+  var phase = "idle";            // idle | spinning | presenting | hold
   var autoRemaining = 0;
   var skipRequested = false;
   var toastTimer = null;
   var displayedSession = 0;
+  var pressResolver = null;      // 等待玩家按「旋转」时挂在这里
+  var awaitingPress = false;
 
   var audio = new window.ASTER_AUDIO.AudioEngine();
   var engine = new ENGINE.SlotEngine();
   var renderer = null;
+  var fx = null;
 
   /* ---------------- 存档 ---------------- */
   function load() {
@@ -97,24 +100,60 @@
   /* ---------------- 小工具 ---------------- */
   var nf = new Intl.NumberFormat("zh-CN");
   function fmt(v) { return nf.format(Math.max(0, Math.round(v || 0))); }
+  function money(v) { return "$" + fmt(v); }
+
   function wait(ms) {
     if (state.reducedMotion) ms = Math.min(ms, 120);
-    if (state.turbo) ms *= 0.45;
+    if (state.turbo) ms *= 0.5;
     return new Promise(function (resolve) {
       var done = false;
-      var finish = function () { if (!done) { done = true; clearInterval(poll); resolve(); } };
+      var poll;
+      var finish = function () { if (!done) { done = true; clearTimeout(timer); clearInterval(poll); resolve(); } };
       var timer = setTimeout(finish, ms);
-      var poll = setInterval(function () {
-        if (skipRequested) { clearTimeout(timer); finish(); }
-      }, 32);
+      poll = setInterval(function () { if (skipRequested) finish(); }, 32);
     });
   }
+
+  /* 让「旋转」键进入"等玩家按"的状态。
+   * waitForPress 会额外挂一个 resolver 把协程停在原地；
+   * 免费游戏只需要按钮态，不需要阻塞协程（否则每按一次就多套一层 await）。 */
+  function armSpinButton(label, hint) {
+    awaitingPress = true;
+    el.spinLabel.textContent = label;
+    el.spinHint.textContent = hint || "SPACE";
+    el.spinBtn.disabled = false;
+    el.spinBtn.classList.add("await");
+  }
+
+  function disarmSpinButton() {
+    awaitingPress = false;
+    pressResolver = null;
+    el.spinBtn.classList.remove("await");
+  }
+
+  /* 等玩家自己按按钮，并把协程停在这里。聚宝盆的每一次重转走这条路。 */
+  function waitForPress(label, hint) {
+    armSpinButton(label, hint);
+    updateUI();
+    return new Promise(function (resolve) {
+      pressResolver = function () {
+        pressResolver = null;
+        awaitingPress = false;
+        skipRequested = false;      // 玩家重新接管，之前的快进不再生效
+        el.spinBtn.classList.remove("await");
+        el.spinBtn.disabled = true;
+        resolve();
+      };
+    });
+  }
+
   function toast(text) {
     el.toast.textContent = text;
     el.toast.classList.add("show");
     clearTimeout(toastTimer);
     toastTimer = setTimeout(function () { el.toast.classList.remove("show"); }, 2200);
   }
+
   function logEvent(text, kind) {
     var empty = el.logList.querySelector(".log-empty");
     if (empty) empty.remove();
@@ -125,12 +164,16 @@
     el.logList.prepend(row);
     while (el.logList.children.length > 14) el.logList.lastElementChild.remove();
   }
+
   function unlock(id) {
     if (state.achievements[id]) return;
     state.achievements[id] = true;
     renderAchievements();
     var item = ACHIEVEMENTS.filter(function (a) { return a.id === id; })[0];
-    if (item) toast("成就达成 · " + item.title);
+    if (item) {
+      toast("成就达成 · " + item.title);
+      fx.burst(40, { y: window.innerHeight - 90, x: 90, speed: 340, size: 8 });
+    }
     save();
   }
 
@@ -157,7 +200,7 @@
 
     var specials = [
       { key: "W", title: "神龙 · 百搭", body: "只出现在第 2/3/4 轮。落轴后<b>整轴展开</b>，替代所有普通图标。" },
-      { key: "S", title: "金锣 · 免费游戏", body: "任意位置 <b>3/4/5 个</b> → 分别赔 2× / 10× / 50×，并开启 <b>8 / 12 / 18</b> 次免费旋转。" },
+      { key: "S", title: "金锣 · 免费游戏", body: "任意 <b>3/4/5 个</b> → 分别赔 2× / 10× / 50×，并开启 <b>8 / 12 / 18</b> 次免费旋转（每一次都由你自己按）。" },
       { key: "C", title: "招财钱币", body: "为<b>龙气</b>充能。3 枚以上还有额外散赔；龙气满时进入 <b>聚宝盆</b>。" }
     ].map(function (item) {
       return '<div class="pay-row special"><canvas class="pay-icon" data-symbol="' + item.key + '" width="56" height="56"></canvas>' +
@@ -174,12 +217,12 @@
       "<li><b>满堂金</b>　　3 枚以上招财钱币 → 龙气额外上涨</li>" +
       "<li><b>龙锣共鸣</b>　2 个金锣 + 至少 1 条神龙 → 神龙化锣，<b>补足触发免费游戏</b></li>" +
       "</ul>" +
-      '<h3>免费游戏 · 龙门</h3><p class="pay-note">起始 <b>2×</b> 倍率，每有一次中奖旋转 <b>+1×</b>（最高 5×）。期间再出 3 个金锣可 <b>+5 次</b>。</p>' +
+      '<h3>免费游戏 · 龙门</h3><p class="pay-note">起始 <b>2×</b> 倍率，每有一次中奖旋转 <b>+1×</b>（最高 5×）。期间再出 3 个金锣可 <b>+5 次</b>。' +
+      "每一次免费旋转都由玩家<b>手动按下</b>。</p>" +
       '<h3>聚宝盆 · 龙气充满时自动开启</h3><p class="pay-note">盘面清空，落下的钱币<b>锁定</b>并带有面值；初始 3 次重转，每次落新币重置为 3 次。' +
-      "填满 15 格额外奖励 <b>200×</b>。</p>" +
+      "<b>每一次重转也都由你自己按</b>，按得越久转得越久。填满 15 格额外奖励 <b>200×</b>。</p>" +
       '<p class="pay-note muted">单次旋转封顶 ' + F.maxWinPerSpin + '× 下注。全部为虚拟金币，不涉及任何真实货币。</p>';
 
-    /* 赔率表里的图标也用同一支画笔画，保证和盘面一致 */
     el.paytableBody.querySelectorAll(".pay-icon").forEach(function (canvas) {
       var key = canvas.dataset.symbol;
       var ctx = canvas.getContext("2d");
@@ -213,10 +256,10 @@
   }
 
   function updateUI() {
-    el.wallet.textContent = fmt(state.wallet);
-    el.buyinWallet.textContent = fmt(state.wallet);
-    el.session.textContent = session > 0 ? fmt(displayedSession) : "—";
-    el.betValue.textContent = fmt(state.bet);
+    el.wallet.textContent = money(state.wallet);
+    el.buyinWallet.textContent = money(state.wallet);
+    el.session.textContent = session > 0 ? money(displayedSession) : "—";
+    el.betValue.textContent = money(state.bet);
     el.spinCount.textContent = fmt(state.spinCount);
 
     var free = engine.mode === "free";
@@ -224,7 +267,7 @@
     if (free) {
       el.freeRemaining.textContent = engine.freeSpins;
       el.freeMultiplier.textContent = engine.freeMultiplier + "×";
-      el.freeTotal.textContent = fmt(engine.freeWon);
+      el.freeTotal.textContent = money(engine.freeWon);
     }
     el.modeLabel.textContent = free ? "龙门免费游戏"
       : phase === "hold" ? "聚宝盆"
@@ -232,8 +275,18 @@
           : session > 0 ? "基础游戏" : "等待入座";
 
     var busy = phase !== "idle";
-    el.spinBtn.disabled = busy || session <= 0;
-    el.spinLabel.textContent = free ? "自动进行" : "旋 转";
+    if (awaitingPress) {
+      el.spinBtn.disabled = false;
+    } else {
+      el.spinBtn.disabled = busy || (session <= 0 && !free);
+      if (free) {
+        el.spinLabel.textContent = "免费旋转";
+        el.spinHint.textContent = "剩 " + engine.freeSpins + " 次";
+      } else if (phase !== "hold") {
+        el.spinLabel.textContent = "旋 转";
+        el.spinHint.textContent = "SPACE";
+      }
+    }
     el.betDown.disabled = busy || free;
     el.betUp.disabled = busy || free;
     el.collectBtn.disabled = busy || session <= 0 || free;
@@ -251,36 +304,42 @@
     updateCharge(false);
   }
 
-  /* 余额数字滚动，比直接跳数好看，也给了大奖一个"变多"的过程 */
+  /* 余额数字滚动。大奖时滚得久一点，让"变多"这件事被看见。 */
   function countSession(target, duration) {
     var from = displayedSession;
     var delta = target - from;
     if (Math.abs(delta) < 1 || state.reducedMotion) {
       displayedSession = target;
-      el.session.textContent = fmt(target);
+      el.session.textContent = money(target);
       return Promise.resolve();
     }
     var start = performance.now();
     var lastTick = 0;
+    el.session.classList.add("counting");
     return new Promise(function (resolve) {
       function step(now) {
         var t = Math.min(1, (now - start) / duration);
         var eased = 1 - Math.pow(1 - t, 2.2);
         displayedSession = from + delta * eased;
-        el.session.textContent = fmt(displayedSession);
-        if (now - lastTick > 70) { lastTick = now; audio.countTick(t); }
+        el.session.textContent = money(displayedSession);
+        if (now - lastTick > 62) { lastTick = now; audio.countTick(t); }
         if (t < 1 && !skipRequested) requestAnimationFrame(step);
-        else { displayedSession = target; el.session.textContent = fmt(target); resolve(); }
+        else {
+          displayedSession = target;
+          el.session.textContent = money(target);
+          el.session.classList.remove("counting");
+          resolve();
+        }
       }
       requestAnimationFrame(step);
     });
   }
 
-  /* ---------------- 横幅 / 特写 ---------------- */
+  /* ---------------- 横幅 / 满屏特写 ---------------- */
   function showBanner(tier, amount, sub) {
-    hideFeature();                 // 两块特写不能叠在一起
+    hideFeature();
     el.bannerTitle.textContent = tier.label;
-    el.bannerAmount.textContent = "+" + fmt(amount);
+    el.bannerAmount.textContent = "+" + money(amount);
     el.bannerSub.textContent = sub || "";
     el.banner.className = "banner show tier-" + tier.id;
   }
@@ -297,22 +356,34 @@
 
   /* ---------------- 旋转流程 ---------------- */
 
-  function computeAnticipation(grid) {
-    /* 在停轮之前就知道结果，所以"期待"只出现在真的还有机会的时候 ——
-     * 不制造假的擦边球。 */
-    var out = {};
-    var scatters = 0, dragons = 0;
+  /* 期待与擦边球。前者只在真的还有机会时开，后者按配置的概率也会"假吊"一下。 */
+  function planTension(grid) {
+    var anticipate = {};
+    var tease = {};
+    var T = F.tease;
+    var scatters = 0, dragons = 0, tops = 0;
+
     for (var c = 0; c < CONFIG.REELS; c++) {
-      if (c >= 2 && scatters >= 2) out[c] = Math.min(2, scatters - 1);
-      if (c === 3 && dragons >= 2) out[c] = Math.max(out[c] || 0, 2);
+      if (c >= 2 && scatters >= 2) anticipate[c] = Math.min(2, scatters - 1);
+      if (c === 3 && dragons >= 2) anticipate[c] = Math.max(anticipate[c] || 0, 2);
+      if (c === 2 && tops >= 2) anticipate[c] = Math.max(anticipate[c] || 0, 1);
       var hasDragon = false;
       for (var r = 0; r < CONFIG.ROWS; r++) {
         if (grid[c][r] === "S") scatters++;
         if (grid[c][r] === "W") hasDragon = true;
+        if (grid[c][r] === "PX") tops++;
       }
       if (hasDragon) dragons++;
     }
-    return out;
+
+    /* 最后一轴的擦边球：有真实机会时必吊，否则按概率也吊 */
+    var last = CONFIG.REELS - 1;
+    var realChance = T.onScatter && anticipate[last];
+    if (realChance || Math.random() < T.chance) tease[last] = T.cells;
+    /* 前两轴都是貔貅时，第三轴也吊一下 */
+    if (T.onTopSymbol && anticipate[2] && Math.random() < 0.6) tease[2] = 1;
+
+    return { anticipate: anticipate, tease: tease };
   }
 
   async function spin() {
@@ -324,6 +395,7 @@
     }
     audio.unlock();
     skipRequested = false;
+    disarmSpinButton();
     phase = "spinning";
     hideBanner();
     hideFeature();
@@ -340,7 +412,7 @@
 
     renderer.setStrips(free ? CONFIG.STRIPS.free : CONFIG.STRIPS.base);
     var outcome = engine.play(state.bet);
-    var anticipate = computeAnticipation(outcome.grid);
+    var tension = planTension(outcome.grid);
 
     audio.startSpinLoop();
     var antStarted = false;
@@ -348,19 +420,30 @@
       audio.reelStop(index, hot);
       if (antStarted) { audio.stopAnticipation(); antStarted = false; }
       renderer.anticipation[index] = 0;
-      var nextLevel = anticipate[index + 1];
+      var nextLevel = tension.anticipate[index + 1];
       if (nextLevel) {
-        /* 前一轴刚停，下一轴才开始"吊着" —— 视觉和声音同时进入期待状态 */
         renderer.anticipation[index + 1] = nextLevel;
         audio.startAnticipation(nextLevel);
         antStarted = true;
+        fx.rays(2600, 0.3);
       }
     };
+    renderer.onReelTease = function () {
+      if (antStarted) { audio.stopAnticipation(); antStarted = false; }
+      audio.tease();
+      fx.flash(0.34, "radial-gradient(ellipse at center, rgba(255,240,200,.9), rgba(255,170,60,.35) 50%, transparent 78%)");
+      fx.rays(1400, 0.5);
+      fx.shake(11, 480);
+    };
 
-    await renderer.spin({ stops: outcome.stops, turbo: state.turbo, anticipate: anticipate });
+    await renderer.spin({
+      stops: outcome.stops, turbo: state.turbo,
+      anticipate: tension.anticipate, tease: tension.tease
+    });
     audio.stopSpinLoop();
     if (antStarted) audio.stopAnticipation();
     renderer.anticipation = {};
+    fx.raysOff();
 
     phase = "presenting";
     await present(outcome);
@@ -376,18 +459,21 @@
   }
 
   async function chainNext(outcome) {
+    /* 免费游戏改为手动：不自动连转，把按钮交回玩家（按钮自己会脉冲提示） */
     if (engine.mode === "free" && engine.freeSpins > 0) {
-      await wait(state.turbo ? 220 : 520);
-      if (phase === "idle") spin();
+      armSpinButton("免费旋转", "剩 " + engine.freeSpins + " 次");
+      updateUI();
       return;
     }
     if (outcome.free.ended) {
       var won = outcome.free.won;
-      showFeature("龙门已闭", "本次免费游戏共赢得", fmt(won) + " 金币", "gold");
-      audio.gong({ vol: 0.3 });
-      logEvent("免费游戏结束，合计 <b>" + fmt(won) + "</b>", "gold");
-      await wait(1900);
+      audio.impact(3);
+      fx.impact(3, { colors: window.ASTER_FX.FESTIVE });
+      showFeature("龙 门 已 闭", "本次免费游戏共赢得", money(won), "gold");
+      logEvent("免费游戏结束，合计 <b>" + money(won) + "</b>", "gold");
+      await wait(2400);
       hideFeature();
+      fx.vignette(false);
       updateUI();
     }
     if (autoRemaining > 0) {
@@ -401,7 +487,7 @@
         return;
       }
       await wait(state.turbo ? 160 : 380);
-      if (phase === "idle" && autoRemaining > 0) spin();
+      if (phase === "idle" && autoRemaining > 0 && engine.mode !== "free") spin();
     }
   }
 
@@ -411,30 +497,35 @@
     /* 1. 神龙整轴展开 */
     if (outcome.wildReels.length) {
       audio.dragon();
-      renderer.flash(0.5);
-      renderer.shake(outcome.wildReels.length * 5);
+      fx.flash(0.55, "radial-gradient(ellipse at center, rgba(255,220,150,.95), rgba(255,90,60,.45) 45%, transparent 75%)");
+      fx.shockwave({ color: "#ff9a4a", width: 12, dur: 800 });
+      fx.burst(90 * outcome.wildReels.length, { speed: 620, size: 11, colors: window.ASTER_FX.FESTIVE });
+      fx.shake(10 + outcome.wildReels.length * 6, 620);
+      renderer.flash(0.6);
+      renderer.shake(outcome.wildReels.length * 7);
       await renderer.expandWilds(outcome.wildReels);
       unlock("dragon");
-      await wait(220);
+      await wait(240);
     }
 
-    /* 2. 特殊组合播报 */
+    /* 2. 特殊组合：满屏特写 */
     if (outcome.combos.indexOf("tripleDragon") >= 0) {
       unlock("triple");
+      audio.impact(4);
+      fx.impact(4, { color: "#ff6a3c", colors: window.ASTER_FX.FESTIVE });
+      fx.rays(3000, 0.85);
       showFeature("三 龙 聚 顶", "龙气直接充满", "本次旋转 3× 加成", "dragon");
-      renderer.burst(90, { speed: 420, size: 8 });
-      renderer.shake(16);
       logEvent("<b>三龙聚顶</b>　龙气瞬间充满", "gold");
-      await wait(1500);
+      await wait(2300);
       hideFeature();
-      await wait(240);            // 让特写淡出完再进下一段演出
+      await wait(240);
     } else if (outcome.combos.indexOf("twinDragon") >= 0) {
       unlock("twin");
+      audio.impact(3);
+      fx.impact(3, { color: "#ffb04a" });
       showFeature("双 龙 戏 珠", "本次旋转 2× 加成", "龙气大幅上涨", "dragon");
-      renderer.burst(55, { speed: 340, size: 7 });
-      renderer.shake(10);
       logEvent("<b>双龙戏珠</b>　2× 加成", "gold");
-      await wait(1150);
+      await wait(1700);
       hideFeature();
       await wait(240);
     }
@@ -447,14 +538,20 @@
         audio.coin(i);
         renderer.ring(c, r, "#ffd76a");
         var p = renderer.cellCenter(c, r);
-        renderer.burst(10, { x: p.x, y: p.y, speed: 160, size: 5, lift: 60 });
-        await wait(110);
+        var rect = el.stage.getBoundingClientRect();
+        renderer.burst(16, { x: p.x, y: p.y, speed: 210, size: 6, lift: 80 });
+        fx.burst(22, { x: rect.left + p.x, y: rect.top + p.y, speed: 300, size: 8, lift: 120 });
+        await wait(130);
       }
       updateCharge(true);
       audio.chargeTick(Math.min(1, engine.charge / F.charge.max));
       if (outcome.combos.indexOf("coinRush") >= 0) {
-        toast("满堂金 · 龙气额外上涨");
-        logEvent("满堂金：" + outcome.coinCount + " 枚招财钱币");
+        audio.impact(2);
+        fx.impact(2);
+        showFeature("满 堂 金", outcome.coinCount + " 枚招财钱币", "龙气额外上涨", "gold");
+        logEvent("<b>满堂金</b>：" + outcome.coinCount + " 枚招财钱币", "gold");
+        await wait(1300);
+        hideFeature();
       }
     } else {
       updateCharge(false);
@@ -469,14 +566,14 @@
         for (var k = 0; k < outcome.wins.length; k++) {
           var w = outcome.wins[k];
           renderer.setHighlight(w.positions, true);
-          audio.pluck(window.ASTER_AUDIO.note(k + 1, 4), { dur: 0.5, vol: 0.18 });
-          await wait(520);
+          audio.pluck(window.ASTER_AUDIO.note(k + 1, 4), { dur: 0.5, vol: 0.2 });
+          await wait(500);
         }
         renderer.setHighlight(all, true);
       }
     }
 
-    /* 5. 结算文案与奖级 */
+    /* 5. 结算与奖级演出 —— 只要赢了就庆祝，哪怕少于下注 */
     var lines = [];
     if (outcome.waysPay > 0) {
       lines.push(outcome.wins.map(function (w) {
@@ -491,53 +588,62 @@
     if (spinWin > 0) {
       var tier = ENGINE.winTier(spinWin, bet);
       audio.win(tier.id);
-      if (tier.threshold >= 10) {
-        /* 达到"大奖"级别才做特写，小额回收不做庆祝 */
-        showBanner(tier, spinWin, lines.join("　"));
-        renderer.burst(tier.threshold >= 50 ? 120 : 60, { speed: 380, size: 8 });
-        renderer.shake(tier.threshold >= 50 ? 18 : 10);
-        renderer.flash(0.4);
-        if (tier.threshold >= 25) renderer.coinRain(50);
-        await countSession(session + spinWin, Math.min(tier.hold * 0.55, 2400));
-        await wait(tier.hold * 0.45);
-        hideBanner();
-        logEvent(tier.label + "　<b>+" + fmt(spinWin) + "</b>　" + lines.join(" "), "gold");
+      if (tier.fx >= 2) {
+        audio.impact(tier.fx);
+        fx.impact(tier.fx, { colors: tier.fx >= 3 ? window.ASTER_FX.FESTIVE : undefined });
       } else {
-        await countSession(session + spinWin, spinWin >= bet ? 620 : 320);
-        el.resultLine.textContent = "+" + fmt(spinWin) + "　" + lines.join("　");
-        el.resultLine.className = "result-line" + (spinWin < bet ? " muted" : " win");
-        if (spinWin >= bet) logEvent("赢得 <b>" + fmt(spinWin) + "</b>　" + lines.join(" "));
+        /* 小额也庆祝，但不动用锣和次低频，否则大奖就不够响了 */
+        fx.burst(38, { speed: 380, size: 8 });
+        fx.flash(0.2);
+        fx.shake(5, 260);
       }
+      showBanner(tier, spinWin, lines.join("　"));
+      renderer.burst(40 + tier.fx * 45, { speed: 320 + tier.fx * 120, size: 7 + tier.fx * 2 });
+      renderer.shake(6 + tier.fx * 5);
+      renderer.flash(0.25 + tier.fx * 0.12);
+      if (tier.fx >= 3) {
+        fx.coinStorm(tier.hold + 1200, 40 + tier.fx * 22);
+        renderer.coinRain(60);
+      }
+      await countSession(session + spinWin, Math.min(tier.hold * 0.6, 2600));
+      await wait(tier.hold * 0.4);
+      hideBanner();
+      if (tier.fx >= 3) logEvent(tier.label.replace(/\s/g, "") + "　<b>+" + money(spinWin) + "</b>　" + lines.join(" "), "gold");
+      else logEvent("赢得 <b>+" + money(spinWin) + "</b>　" + lines.join(" "));
+      el.resultLine.textContent = "+" + money(spinWin) + "　" + lines.join("　");
+      el.resultLine.className = "result-line win";
       if (spinWin / bet >= 100) unlock("hundred");
     } else {
       el.resultLine.textContent = engine.mode === "free" ? "本轮未中" : "未中奖";
       el.resultLine.className = "result-line muted";
-      await wait(state.turbo ? 80 : 200);
+      await wait(state.turbo ? 80 : 220);
     }
     displayedSession = session + spinWin;
 
     /* 6. 聚宝盆 */
-    if (outcome.hold) {
-      await runHold(outcome);
-    }
+    if (outcome.hold) await runHold(outcome);
 
     /* 7. 免费游戏开启 */
     if (outcome.free.triggered) {
       unlock("free");
       audio.freeSpinsStart();
       renderer.clearHighlight();
-      showFeature("龙 门 大 开", outcome.free.triggered + " 次免费旋转", "起始 " + F.freeSpins.startMultiplier + "× · 每次中奖再 +1×", "gong");
-      renderer.burst(100, { speed: 400, size: 8, colors: ["#ffd76a", "#ff6f5e", "#fff2c8"] });
-      renderer.shake(14);
+      fx.impact(4, { colors: window.ASTER_FX.FESTIVE, color: "#ffd15c" });
+      fx.rays(4200, 0.9);
+      fx.coinStorm(3200, 70);
+      fx.vignette(true, "rgba(232,182,64,.4)");
+      showFeature("龙 门 大 开", outcome.free.triggered + " 次免费旋转",
+        "起始 " + F.freeSpins.startMultiplier + "× · 每次中奖再 +1× · 由你亲手按下", "gong");
       logEvent("<b>龙门大开</b>　" + outcome.free.triggered + " 次免费旋转（" + outcome.effectiveScatters + " 个金锣）", "gold");
-      await wait(2100);
+      await wait(3000);
       hideFeature();
       audio.setIntensity(1);
       document.body.classList.add("free-mode");
     } else if (outcome.free.retriggered) {
+      audio.impact(2);
+      fx.impact(2);
       toast("金锣再鸣 · 免费旋转 +" + outcome.free.retriggered);
-      audio.gong({ vol: 0.3 });
-      logEvent("免费旋转 +" + outcome.free.retriggered);
+      logEvent("免费旋转 <b>+" + outcome.free.retriggered + "</b>", "gold");
     }
     if (outcome.free.ended) {
       audio.setIntensity(0);
@@ -549,25 +655,25 @@
     updateCharge(false);
   }
 
-  /* ---------------- 聚宝盆 ---------------- */
+  /* ---------------- 聚宝盆：每一次重转都由玩家自己按 ---------------- */
   async function runHold(outcome) {
     var hold = outcome.hold;
     var size = CONFIG.REELS * CONFIG.ROWS;
+    var H = F.holdSpin;
     phase = "hold";
     unlock("hold");
     updateUI();
 
     audio.holdStart();
-    audio.setIntensity(1);
+    fx.impact(3, { color: "#ffd15c" });
+    fx.rays(3200, 0.7);
+    fx.vignette(true, "rgba(232,182,64,.45)");
     document.body.classList.add("hold-mode");
-    showFeature("聚 宝 盆", "龙气充盈，钱币锁定", "落新币即重置重转次数", "gold");
-    renderer.shake(12);
-    renderer.flash(0.6);
-    await wait(1700);
+    showFeature("聚 宝 盆", "龙气充盈 · 钱币锁定", "每一次重转都由你自己按", "gold");
+    await wait(2400);
     hideFeature();
 
-    var board = new Array(size).fill(0);
-    renderer.enterHold(board);
+    renderer.enterHold(new Array(size).fill(0));
     el.holdHud.classList.add("visible");
     var running = 0;
 
@@ -575,63 +681,117 @@
       renderer.holdLand(hold.seeded[i].index, hold.seeded[i].value);
       audio.holdLock(i);
       running += hold.seeded[i].value * outcome.bet;
-      el.holdTotal.textContent = fmt(running);
-      await wait(200);
+      el.holdTotal.textContent = money(running);
+      flashHoldCell(hold.seeded[i].index, 1);
+      await wait(230);
     }
-    el.holdRespins.textContent = F.holdSpin.respins;
+
+    var respins = H.respins;
+    el.holdRespins.textContent = respins;
 
     for (var round = 0; round < hold.rounds.length; round++) {
       var step = hold.rounds[round];
+      el.holdRespins.textContent = respins;
+      updateUI();
+      await waitForPress("重 转", "剩 " + respins + " 次");
+
+      /* 按得越久转得越久：每一轮都比上一轮再长一点 */
+      var ms = Math.min(H.spinMsMax, H.spinMs + round * H.spinMsStep);
+      if (state.turbo) ms *= 0.6;
       renderer.holdSpinning(true);
       audio.startSpinLoop();
-      await wait(620);
+      audio.riser(ms, { vol: 0.16 });
+      fx.rays(ms + 400, 0.4);
+      el.holdHud.classList.add("spinning");
+      await new Promise(function (r) { setTimeout(r, ms); });
+      el.holdHud.classList.remove("spinning");
       renderer.holdSpinning(false);
       audio.stopSpinLoop();
 
-      for (var k = 0; k < step.landed.length; k++) {
-        renderer.holdLand(step.landed[k].index, step.landed[k].value);
-        audio.holdLock(k);
-        running += step.landed[k].value * outcome.bet;
-        el.holdTotal.textContent = fmt(running);
-        await wait(260);
-      }
-      el.holdRespins.textContent = step.respinsLeft;
       if (step.landed.length) {
+        for (var k = 0; k < step.landed.length; k++) {
+          renderer.holdLand(step.landed[k].index, step.landed[k].value);
+          audio.holdLock(k);
+          running += step.landed[k].value * outcome.bet;
+          el.holdTotal.textContent = money(running);
+          flashHoldCell(step.landed[k].index, step.landed[k].value);
+          await wait(300);
+        }
+        audio.impact(2);
+        fx.impact(2);
         el.holdHud.classList.remove("reset");
         void el.holdHud.offsetWidth;
         el.holdHud.classList.add("reset");
+        respins = H.respins;
+      } else {
+        audio.subDrop({ vol: 0.22, dur: 0.5, from: 120, to: 40 });
+        respins = step.respinsLeft;
       }
-      await wait(step.landed.length ? 320 : 180);
+      el.holdRespins.textContent = respins;
+      await wait(420);
     }
+
+    /* ---- 结算：满屏爆炸 + 金币持续崩 ---- */
+    el.holdHud.classList.remove("visible");
+    var tier = ENGINE.winTier(hold.total, outcome.bet);
 
     if (hold.grand) {
       unlock("grand");
       audio.grand();
+      fx.impact(4, { colors: window.ASTER_FX.FESTIVE });
+      fx.rays(9000, 1);
+      fx.coinStorm(9000, 150);
+      for (var s = 0; s < 6; s++) {
+        setTimeout(function () { fx.shockwave({ color: "#ffe08a", width: 14, dur: 1200 }); }, s * 320);
+      }
       showFeature("大 满 贯", "十五格全满", "额外 " + F.holdSpin.grandPay + "× 下注", "grand");
-      renderer.coinRain(140);
-      renderer.shake(24);
-      renderer.flash(0.85);
-      await wait(2600);
+      renderer.coinRain(180);
+      await wait(3600);
       hideFeature();
+    } else {
+      audio.impact(Math.max(3, tier.fx));
+      fx.impact(Math.max(3, tier.fx), { colors: window.ASTER_FX.FESTIVE });
     }
 
-    await wait(450);
-    el.holdHud.classList.remove("visible");
+    /* 巨大的满屏收尾：光芒 + 冲击波 + 持续几秒的金币暴雨 */
+    audio.coinShower(4200, 24);
+    fx.rays(5200, 0.95);
+    fx.coinStorm(5200, hold.grand ? 170 : 110);
+    fx.shockwave({ color: "#ffe08a", width: 16, dur: 1300 });
+    fx.shockwave({ color: "#ff8a4a", width: 10, dur: 1700 });
+    fx.shake(22, 900);
+    renderer.coinRain(120);
+
+    showBanner(tier, hold.total, "聚宝盆 · " + hold.filled + " 枚钱币" + (hold.grand ? " · 大满贯" : ""));
+    await countSession(session + outcome.spinWin + hold.total, 2600);
+    await wait(2800);                 // 让金币再崩一会儿
+    hideBanner();
     renderer.exitHold();
     document.body.classList.remove("hold-mode");
-    if (engine.mode !== "free") audio.setIntensity(0);
+    if (engine.mode !== "free") { fx.vignette(false); audio.setIntensity(0); }
 
-    var tier = ENGINE.winTier(hold.total, outcome.bet);
-    showBanner(tier, hold.total, "聚宝盆 · " + hold.filled + " 枚钱币" + (hold.grand ? " · 大满贯" : ""));
-    audio.win(tier.id);
-    renderer.coinRain(60);
-    await countSession(session + outcome.spinWin + hold.total, 1600);
-    await wait(1100);
-    hideBanner();
-    logEvent("<b>聚宝盆</b>　" + hold.filled + " 枚 → <b>+" + fmt(hold.total) + "</b>" + (hold.grand ? "（大满贯）" : ""), "gold");
+    logEvent("<b>聚宝盆</b>　" + hold.filled + " 枚 → <b>+" + money(hold.total) + "</b>" +
+      (hold.grand ? "（大满贯）" : ""), "gold");
     updateCharge(true);
     phase = "presenting";
     updateUI();
+  }
+
+  /* 聚宝盆落币时在屏幕坐标上也炸一下，面值越大越夸张 */
+  function flashHoldCell(index, value) {
+    var c = Math.floor(index / CONFIG.ROWS), r = index % CONFIG.ROWS;
+    var p = renderer.cellCenter(c, r);
+    var rect = el.stage.getBoundingClientRect();
+    var big = value >= 5;
+    fx.burst(big ? 90 : 34, {
+      x: rect.left + p.x, y: rect.top + p.y,
+      speed: big ? 520 : 280, size: big ? 11 : 7, lift: 140
+    });
+    if (big) {
+      fx.shockwave({ x: rect.left + p.x, y: rect.top + p.y, color: "#ffe08a", width: 7, dur: 700, max: 620 });
+      fx.flash(0.3);
+      fx.shake(12, 380);
+    }
   }
 
   /* ---------------- 买入 / 收手 ---------------- */
@@ -647,8 +807,10 @@
     displayedSession = amount;
     autoRemaining = 0;
     el.buyinModal.classList.remove("show");
-    audio.gong({ vol: 0.28, dur: 2.4 });
-    logEvent("入座，带入 <b>" + fmt(amount) + "</b> 金币");
+    audio.gong({ vol: 0.34, dur: 2.6 });
+    audio.coinShower(700, 14);
+    fx.burst(70, { y: window.innerHeight * 0.5, speed: 460, size: 9 });
+    logEvent("入座，带入 <b>" + money(amount) + "</b>");
     el.resultLine.textContent = "按「旋转」开始";
     el.resultLine.className = "result-line";
     save();
@@ -662,9 +824,11 @@
     session = 0;
     displayedSession = 0;
     autoRemaining = 0;
-    audio.bell(window.ASTER_AUDIO.note(4, 5), { dur: 0.8, vol: 0.24 });
-    logEvent("收手，带走 <b>" + fmt(amount) + "</b> 金币", "gold");
-    toast("已收回 " + fmt(amount) + " 到金库");
+    audio.bell(window.ASTER_AUDIO.note(4, 5), { dur: 0.9, vol: 0.28 });
+    audio.coinShower(900, 18);
+    fx.burst(90, { y: window.innerHeight * 0.72, speed: 420, size: 9 });
+    logEvent("收手，带走 <b>" + money(amount) + "</b>", "gold");
+    toast("已收回 " + money(amount) + " 到金库");
     save();
     updateUI();
     openBuyin();
@@ -676,6 +840,12 @@
     void node.offsetWidth;
     node.classList.add("pressed");
     setTimeout(function () { node.classList.remove("pressed"); }, 260);
+  }
+
+  /* 旋转键在三种语境下都是它：普通旋转、手动免费旋转、聚宝盆重转 */
+  function pressSpin() {
+    if (pressResolver) { pressFeedback(el.spinBtn); pressResolver(); return; }
+    if (phase === "idle") { pressFeedback(el.spinBtn); spin(); }
   }
 
   function bind() {
@@ -691,11 +861,8 @@
       });
     });
 
-    el.spinBtn.addEventListener("click", function () {
-      if (phase === "idle") spin();
-    });
+    el.spinBtn.addEventListener("click", pressSpin);
     el.collectBtn.addEventListener("click", collect);
-
     el.betDown.addEventListener("click", function () { stepBet(-1); });
     el.betUp.addEventListener("click", function () { stepBet(1); });
 
@@ -741,12 +908,13 @@
     el.topupBtn.addEventListener("click", function () {
       state.wallet += CONFIG.ECONOMY.topUp;
       save(); updateUI();
-      toast("已补充 " + fmt(CONFIG.ECONOMY.topUp) + " 虚拟金币");
+      toast("已补充 " + money(CONFIG.ECONOMY.topUp));
     });
 
     el.optMotion.addEventListener("change", function () {
       state.reducedMotion = el.optMotion.checked;
       renderer.reducedMotion = state.reducedMotion;
+      fx.reduced = state.reducedMotion;
       document.body.classList.toggle("reduced-motion", state.reducedMotion);
       save();
     });
@@ -770,13 +938,13 @@
       if (e.code !== "Space" || e.repeat) return;
       if (document.querySelector(".modal-backdrop.show")) return;
       e.preventDefault();
-      if (phase === "idle") { pressFeedback(el.spinBtn); spin(); }
+      if (pressResolver || phase === "idle") pressSpin();
       else skipRequested = true;
     });
 
-    /* 演出过程中点画面即可快进 */
+    /* 演出过程中点画面即可快进（等待玩家按的环节除外） */
     el.stage.addEventListener("click", function () {
-      if (phase === "presenting" || phase === "hold") skipRequested = true;
+      if (!pressResolver && (phase === "presenting" || phase === "hold")) skipRequested = true;
     });
 
     var resizeTimer = null;
@@ -803,11 +971,12 @@
   function boot() {
     renderer = new window.ASTER_RENDER.Renderer(el.reelCanvas);
     renderer.reducedMotion = state.reducedMotion;
+    fx = new window.ASTER_FX.ScreenFX(el.fxCanvas, document.querySelector(".shell"));
+    fx.reduced = state.reducedMotion;
     engine.charge = Math.min(F.charge.max - 1, state.charge || 0);
 
     /* 开局摆一个不中奖的盘面，别一进来就像刚中了什么 */
-    var stops = [4, 17, 31, 46, 9];
-    renderer.setStops(stops);
+    renderer.setStops([4, 17, 31, 46, 9]);
 
     el.optMotion.checked = state.reducedMotion;
     el.optQuickwin.checked = state.quickWin;
@@ -816,7 +985,7 @@
     audio.musicOn = state.musicOn;
 
     el.buyinOptions.innerHTML = CONFIG.ECONOMY.buyins.map(function (b) {
-      return '<button data-amount="' + b.amount + '"><b>' + fmt(b.amount) + "</b><span>" + b.title + "</span><small>" + b.note + "</small></button>";
+      return '<button data-amount="' + b.amount + '"><b>' + money(b.amount) + "</b><span>" + b.title + "</span><small>" + b.note + "</small></button>";
     }).join("");
 
     renderPaytable();
@@ -824,23 +993,21 @@
     bind();
     updateUI();
 
-    /* 调试出口：tools/drive.py 的端到端检查靠它观察内部状态。
-     * 纯前端虚拟币游戏，暴露这些不会带来额外风险。 */
     window.__jinlong = {
       get engine() { return engine; },
       get renderer() { return renderer; },
+      get fx() { return fx; },
       get state() { return state; },
       get phase() { return phase; },
       get session() { return session; },
+      get awaitingPress() { return awaitingPress; },
+      press: pressSpin,
       spin: spin,
       buyIn: buyIn
     };
 
-    /* 字体加载完成后布局可能变，重新量一次画布 */
-    window.addEventListener("load", function () { renderer.resize(); }, { once: true });
+    window.addEventListener("load", function () { renderer.resize(); fx.resize(); }, { once: true });
 
-    /* 开发与截图用：?dev=buyin 自动入座，?dev=spin 再自动转。
-     * 只影响开局动作，不改变任何数值逻辑。 */
     var dev = new URLSearchParams(location.search).get("dev");
     if (dev) {
       buyIn(CONFIG.ECONOMY.buyins[1].amount);

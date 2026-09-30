@@ -14,6 +14,12 @@
     <span class="lantern r1"></span><span class="lantern r2"></span>
   </div>
 
+  <!-- 全屏特效层：放射光在 UI 之下，金币与闪光在 UI 之上 -->
+  <div id="fx-rays" aria-hidden="true"></div>
+  <canvas id="fx-canvas" aria-hidden="true"></canvas>
+  <div id="fx-vignette" aria-hidden="true"></div>
+  <div id="fx-flash" aria-hidden="true"></div>
+
   <div class="shell">
     <header class="topbar">
       <div class="brand">
@@ -66,12 +72,6 @@
               <div class="banner-amount" id="banner-amount"></div>
               <div class="banner-sub" id="banner-sub"></div>
             </div>
-
-            <div class="feature-card" id="feature-card" aria-live="polite">
-              <div class="feature-title" id="feature-title"></div>
-              <div class="feature-sub" id="feature-sub"></div>
-              <div class="feature-meta" id="feature-meta"></div>
-            </div>
           </div>
 
           <div class="result-line" id="result-line" aria-live="polite">选择带入金额后开始</div>
@@ -102,7 +102,7 @@
 
           <button class="spin-btn" id="spin-btn">
             <span class="spin-ring" aria-hidden="true"></span>
-            <span class="spin-core"><b id="spin-label">旋 转</b><small>SPACE</small></span>
+            <span class="spin-core"><b id="spin-label">旋 转</b><small id="spin-hint">SPACE</small></span>
           </button>
 
           <div class="ctrl-group side-group">
@@ -149,6 +149,15 @@
       <span>金龙聚宝 · 所有金币均为虚拟，不可充值、提现或兑换</span>
       <button class="link-btn" id="reset-save">重置本地进度</button>
     </footer>
+  </div>
+
+  <!-- 玩法触发的满屏特写 -->
+  <div class="feature-card" id="feature-card" aria-live="polite">
+    <div class="feature-inner">
+      <div class="feature-title" id="feature-title"></div>
+      <div class="feature-sub" id="feature-sub"></div>
+      <div class="feature-meta" id="feature-meta"></div>
+    </div>
   </div>
 
   <!-- 买入 -->
@@ -198,6 +207,7 @@
   <script src="js/engine.js"></script>
   <script src="js/art.js"></script>
   <script src="js/audio.js"></script>
+  <script src="js/fx.js"></script>
   <script src="js/render.js"></script>
   <script src="js/app.js"></script>
 </body>

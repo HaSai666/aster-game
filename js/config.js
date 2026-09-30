@@ -116,6 +116,10 @@
       respins: 3,             // 初始重转次数；每次落新币重置
       landChance: 0.058,      // 每个空位每次重转的落币概率
       grandPay: 200,          // 15 格全满额外奖励（× 下注）
+      manual: true,           // 每一次重转都由玩家自己按
+      spinMs: 1600,           // 单次重转的转动时长
+      spinMsStep: 280,        // 每多转一次再长一点，紧张感递增
+      spinMsMax: 3600,
       values: [               // 单枚钱币面值（× 下注）与权重
         { value: 1, weight: 68 },
         { value: 2, weight: 20 },
@@ -124,17 +128,29 @@
         { value: 10, weight: 2 },
         { value: 20, weight: 1 }
       ]
+    },
+    /* 免费游戏是否由玩家手动逐次按（关掉就是自动连转） */
+    manualFreeSpins: true,
+    /* 擦边球：最后一轴先"差一点点"停住、顿一下再爬到位。
+     * chance 是在没有真实机会时也照样吊一下的概率。 */
+    tease: {
+      cells: 2,
+      chance: 0.22,
+      onScatter: true,        // 已落 2 个金锣时必定吊
+      onTopSymbol: true       // 前两轴都有貔貅时也吊
     }
   };
 
-  /* 大奖分级：阈值是"本次总赢 ÷ 单次下注"。 */
+  /* 大奖分级：阈值是"本次总赢 ÷ 单次下注"。
+   * tiny 档（赢了但不到下注）同样有庆祝 —— 这是刻意选择的"上头"取向。 */
   var WIN_TIERS = [
-    { id: "legend", label: "神话降临", threshold: 100, hold: 5200 },
-    { id: "super", label: "超级巨奖", threshold: 50, hold: 4200 },
-    { id: "mega", label: "巨奖", threshold: 25, hold: 3400 },
-    { id: "big", label: "大奖", threshold: 10, hold: 2600 },
-    { id: "nice", label: "不错", threshold: 3, hold: 1200 },
-    { id: "small", label: "", threshold: 0, hold: 0 }
+    { id: "legend", label: "神 话 降 临", threshold: 100, hold: 6200, fx: 4 },
+    { id: "super", label: "超 级 巨 奖", threshold: 50, hold: 5000, fx: 4 },
+    { id: "mega", label: "巨 奖", threshold: 25, hold: 4000, fx: 3 },
+    { id: "big", label: "大 奖", threshold: 10, hold: 3000, fx: 3 },
+    { id: "nice", label: "不 错", threshold: 3, hold: 1700, fx: 2 },
+    { id: "small", label: "小 赢", threshold: 1, hold: 1100, fx: 1 },
+    { id: "tiny", label: "小 赏", threshold: 0, hold: 850, fx: 1 }
   ];
 
   var ECONOMY = {

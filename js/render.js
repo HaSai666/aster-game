@@ -41,7 +41,7 @@
     this.strips = CONFIG.STRIPS.base;
     this.reels = [];
     for (var c = 0; c < REELS; c++) {
-      this.reels.push({ pos: c * 7, prevPos: c * 7, speed: 0, anim: null, bounce: null, flash: 0 });
+      this.reels.push({ pos: c * 7, prevPos: c * 7, speed: 0, anim: null, bounce: null, flash: 0, teasing: false });
     }
     this.atlas = {};
     this.blurAtlas = {};
@@ -192,6 +192,7 @@
     this.wildReels = [];
     this.wildGrow = {};
     this.anticipation = {};
+    this.reels.forEach(function (r) { r.teasing = false; });
 
     var promises = [];
     var startAt = performance.now();
@@ -205,7 +206,11 @@
       });
     }
 
-    this._spinPlan = { pending: pending, stops: stops, startAt: startAt, speed: speed, extra: opts.anticipate || {} };
+    this._spinPlan = {
+      pending: pending, stops: stops, startAt: startAt, speed: speed,
+      extra: opts.anticipate || {},
+      tease: opts.tease || {}
+    };
 
     pending.forEach(function (p) {
       promises.push(new Promise(function (resolve) { p.resolve = resolve; }));
@@ -219,8 +224,7 @@
     return Promise.all(promises);
   };
 
-  /* 关键轴期待：在第 index 轴上额外拉长时间并打开视觉/听觉提示。
-   * 结果在动画开始前就已确定，所以这是"真的还有机会"，不是假装的擦边球。 */
+  /* 关键轴期待：在第 index 轴上额外拉长时间并打开视觉/听觉提示。 */
   Renderer.prototype.requestAnticipation = function (index, level) {
     if (!this._spinPlan) return;
     this._spinPlan.extra[index] = level;
@@ -232,25 +236,47 @@
     var len = this.strips[p.index].length;
     var stop = mod(this._spinPlan.stops[p.index], len);
     var extra = this._spinPlan.extra[p.index] || 0;
-    var dur = p.dur + (extra ? (this.reducedMotion ? 300 : 1500 + extra * 700) : 0);
+    var tease = this.reducedMotion ? 0 : (this._spinPlan.tease[p.index] || 0);
+    var dur = p.dur + (extra ? (this.reducedMotion ? 300 : 1500 + extra * 800) : 0);
+
+    /* 擦边球：先"差一点点"停住、顿一下，再蠕动到真正的位置。
+     * tease 是提前停住的格数（1~2），所以第二段只要爬一两格。 */
+    var firstTarget = tease ? mod(stop + tease, len) : stop;
+
+    function finish() {
+      reel.anim = null;
+      reel.pos = stop;
+      reel.bounce = { start: performance.now(), dur: self.reducedMotion ? 90 : 230, target: stop };
+      reel.flash = 1;
+      reel.teasing = false;
+      if (self.onReelStop) self.onReelStop(p.index, !!extra);
+      p.resolve();
+    }
+
+    function crawl() {
+      reel.teasing = true;
+      if (self.onReelTease) self.onReelTease(p.index);
+      setTimeout(function () {
+        reel.anim = {
+          from: reel.pos, dist: tease, start: performance.now(), dur: 620,
+          stop: stop, slow: true, done: finish
+        };
+      }, 560);
+    }
 
     var from = reel.pos;
-    var need = mod(from - stop, len);
+    var need = mod(from - firstTarget, len);
     var cycles = Math.max(1, Math.round((this._spinPlan.speed * dur / 1000 - need) / len));
-    var dist = need + cycles * len;
 
     reel.anim = {
-      from: from, dist: dist, start: performance.now(), dur: dur, stop: stop,
-      done: function () {
+      from: from, dist: need + cycles * len, start: performance.now(), dur: dur, stop: firstTarget,
+      done: tease ? function () {
         reel.anim = null;
-        reel.pos = stop;
-        reel.bounce = { start: performance.now(), dur: self.reducedMotion ? 90 : 230, target: stop };
-        reel.flash = 1;
-        if (self.onReelStop) self.onReelStop(p.index, !!extra);
-        p.resolve();
-      }
+        reel.pos = firstTarget;
+        reel.bounce = { start: performance.now(), dur: 170, target: firstTarget };
+        crawl();
+      } : finish
     };
-    if (extra) reel.anticipationLevel = extra;
   };
 
   /* 神龙整轴展开动画 */
@@ -403,7 +429,8 @@
       if (reel.anim) {
         var a = reel.anim;
         var u = clamp((now - a.start) / a.dur, 0, 1);
-        reel.pos = a.from - a.dist * travelled(u);
+        /* slow 段是擦边球的"最后一两格蠕动"，用缓出曲线而不是滚轮速度曲线 */
+        reel.pos = a.from - a.dist * (a.slow ? easeOutCubic(u) : travelled(u));
         if (u >= 1) a.done();
       } else if (reel.bounce) {
         var b = reel.bounce;
@@ -480,7 +507,10 @@
 
   Renderer.prototype._drawReels = function (ctx, now) {
     var L = this.layout;
-    var self = this;
+    /* 有轴在"顿停"时，其他轴压暗，把注意力全部推到那一轴上 */
+    var spotlight = -1;
+    for (var s = 0; s < REELS; s++) if (this.reels[s].teasing) { spotlight = s; break; }
+
     for (var c = 0; c < REELS; c++) {
       var reel = this.reels[c];
       var strip = this.strips[c];
@@ -514,6 +544,7 @@
         var isWin = visible && this._isHighlighted(c, r);
         var alpha = 1;
         if (this.dimOthers && visible && !isWin) alpha = 0.32;
+        if (spotlight >= 0 && c !== spotlight) alpha = Math.min(alpha, 0.34);
         if (this.wildGrow[c] !== undefined && visible) alpha = 1;
 
         ctx.globalAlpha = alpha;
@@ -549,6 +580,23 @@
         ctx.strokeStyle = "rgba(255,168,70," + (0.5 + Math.sin(now / 90) * 0.35) + ")";
         ctx.lineWidth = 3;
         ART.roundRect(ctx, x - 2, L.viewTop - 2, L.cellW + 4, L.viewH + 4, L.cellW * 0.14);
+        ctx.stroke();
+        ctx.restore();
+      }
+      /* 擦边球顿住的那一下：整轴打上炽白边框，"差一点就中了" */
+      if (reel.teasing) {
+        var beat = 0.55 + Math.sin(now / 48) * 0.45;
+        ctx.save();
+        ctx.strokeStyle = "rgba(255,248,220," + beat + ")";
+        ctx.lineWidth = 6;
+        ctx.shadowColor = "#ffd15c";
+        ctx.shadowBlur = 40;
+        ART.roundRect(ctx, x - 4, L.viewTop - 4, L.cellW + 8, L.viewH + 8, L.cellW * 0.16);
+        ctx.stroke();
+        ctx.strokeStyle = "rgba(255,150,70," + (beat * 0.7) + ")";
+        ctx.lineWidth = 2;
+        ctx.shadowBlur = 0;
+        ART.roundRect(ctx, x - 9, L.viewTop - 9, L.cellW + 18, L.viewH + 18, L.cellW * 0.18);
         ctx.stroke();
         ctx.restore();
       }

@@ -41,7 +41,7 @@
 
     var ctx = this.ctx;
     this.master = ctx.createGain();
-    this.master.gain.value = 0.9;
+    this.master.gain.value = 1.25;
 
     /* 轻压缩，避免大奖时几层音叠在一起削顶 */
     this.comp = ctx.createDynamicsCompressor();
@@ -274,6 +274,106 @@
     src.start(t);
   };
 
+  /* ---- 夸张化：冲击、铺垫、钱币瀑布 ---- */
+
+  /* 次低频下坠（sub drop）—— "咚"的那股压迫感来自这里 */
+  AudioEngine.prototype.subDrop = function (opts) {
+    if (!this.ready || !this.sfxOn) return;
+    opts = opts || {};
+    var ctx = this.ctx;
+    var t = this._now(opts.delay);
+    var dur = opts.dur || 1.1;
+    var osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(opts.from || 180, t);
+    osc.frequency.exponentialRampToValueAtTime(opts.to || 28, t + dur * 0.85);
+    var g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(opts.vol || 0.55, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    /* 轻微失真让它在小喇叭上也听得见 */
+    var shaper = ctx.createWaveShaper();
+    var curve = new Float32Array(1024);
+    for (var i = 0; i < 1024; i++) {
+      var x = (i / 512) - 1;
+      curve[i] = Math.tanh(x * 2.2);
+    }
+    shaper.curve = curve;
+    osc.connect(shaper); shaper.connect(g); g.connect(this.sfxBus);
+    osc.start(t); osc.stop(t + dur + 0.1);
+  };
+
+  /* 上冲铺垫：白噪扫频 + 升调锯齿，用在特效爆发前 */
+  AudioEngine.prototype.riser = function (ms, opts) {
+    if (!this.ready || !this.sfxOn) return;
+    opts = opts || {};
+    var ctx = this.ctx;
+    var t = this._now(opts.delay);
+    var dur = ms / 1000;
+
+    var src = ctx.createBufferSource();
+    src.buffer = this._noiseBuffer(Math.max(0.3, dur));
+    var bp = ctx.createBiquadFilter();
+    bp.type = "bandpass"; bp.Q.value = 2.2;
+    bp.frequency.setValueAtTime(320, t);
+    bp.frequency.exponentialRampToValueAtTime(8200, t + dur);
+    var ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.0001, t);
+    ng.gain.exponentialRampToValueAtTime(opts.vol || 0.22, t + dur * 0.85);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.12);
+    src.connect(bp); bp.connect(ng); ng.connect(this.sfxBus);
+    src.start(t); src.stop(t + dur + 0.2);
+
+    var osc = ctx.createOscillator();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(note(0, 2), t);
+    osc.frequency.exponentialRampToValueAtTime(note(0, 5), t + dur);
+    var lp = ctx.createBiquadFilter();
+    lp.type = "lowpass"; lp.Q.value = 6;
+    lp.frequency.setValueAtTime(500, t);
+    lp.frequency.exponentialRampToValueAtTime(7000, t + dur);
+    var g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.16, t + dur * 0.9);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.1);
+    osc.connect(lp); lp.connect(g); g.connect(this.sfxBus);
+    osc.start(t); osc.stop(t + dur + 0.2);
+  };
+
+  /* 钱币瀑布：一串随机音高的铃，持续 ms 毫秒 */
+  AudioEngine.prototype.coinShower = function (ms, density) {
+    if (!this.ready || !this.sfxOn) return;
+    var n = Math.min(90, Math.round((ms / 1000) * (density || 16)));
+    for (var i = 0; i < n; i++) {
+      this.bell(note(Math.floor(Math.random() * 6), 5 + (Math.random() < 0.35 ? 1 : 0)), {
+        delay: (i / n) * (ms / 1000) + Math.random() * 0.04,
+        dur: 0.4, vol: 0.09 + Math.random() * 0.06, ratio: 3.1 + Math.random(), index: 1.6
+      });
+    }
+  };
+
+  /* 一记"爆点"。level 1~4 逐级夸张，和 fx.impact 配套使用。 */
+  AudioEngine.prototype.impact = function (level) {
+    var lv = Math.max(1, Math.min(4, level));
+    this.subDrop({ vol: 0.35 + lv * 0.08, dur: 0.9 + lv * 0.25 });
+    this.gong({ vol: 0.26 + lv * 0.07, dur: 2.4 + lv * 0.8 });
+    for (var i = 0; i < lv + 1; i++) {
+      this.drum({ delay: i * 0.085, freq: 150 - i * 8, vol: 0.34 + lv * 0.04 });
+    }
+    if (lv >= 2) this.coinShower(500 + lv * 350, 12 + lv * 6);
+    if (lv >= 3) {
+      for (var k = 0; k < 8; k++) this.pluck(note(k, 4), { delay: 0.18 + k * 0.065, dur: 0.9, vol: 0.2 });
+    }
+  };
+
+  /* 擦边球顿住那一下：悬而未决的挂留和弦 */
+  AudioEngine.prototype.tease = function () {
+    this.drum({ freq: 190, vol: 0.42, dur: 0.5 });
+    this.pluck(note(1, 4), { dur: 1.1, vol: 0.26 });
+    this.pluck(note(3, 4), { delay: 0.04, dur: 1.1, vol: 0.22 });
+    this.woodblock({ freq: 2200, vol: 0.2 });
+  };
+
   /* ---- 游戏事件 ---- */
 
   AudioEngine.prototype.ui = function (kind) {
@@ -409,24 +509,32 @@
     g.gain.exponentialRampToValueAtTime(0.0001, t + 1.3);
     osc.connect(lp); lp.connect(g); g.connect(this.sfxBus);
     osc.start(t); osc.stop(t + 1.4);
-    this.drum({ freq: 130, vol: 0.42 });
-    this.gong({ freq: 96, vol: 0.18, dur: 2.2, delay: 0.04 });
+    this.drum({ freq: 130, vol: 0.5 });
+    this.drum({ delay: 0.11, freq: 108, vol: 0.4 });
+    this.subDrop({ vol: 0.4, dur: 1.1 });
+    this.gong({ freq: 96, vol: 0.26, dur: 2.8, delay: 0.04 });
   };
 
-  /* 中奖：五声音阶上行琶音，层数随奖级递增。 */
+  /* 中奖：五声音阶上行琶音，层数随奖级递增。大奖级另外叠冲击与钱币瀑布。 */
   AudioEngine.prototype.win = function (tierId) {
-    var levels = { small: 2, nice: 3, big: 5, mega: 7, super: 9, legend: 12 };
-    var count = levels[tierId] || 2;
-    var octave = tierId === "small" ? 4 : 4;
+    var levels = { tiny: 2, small: 3, nice: 5, big: 8, mega: 11, super: 14, legend: 18 };
+    var count = levels[tierId] || 3;
     for (var i = 0; i < count; i++) {
-      this.pluck(note(i, octave), { delay: i * 0.075, dur: 0.6, vol: 0.2 });
+      this.pluck(note(i, 4), { delay: i * 0.068, dur: 0.7, vol: 0.22 });
+      if (i % 2 === 0) this.bell(note(i, 5), { delay: i * 0.068 + 0.02, dur: 0.4, vol: 0.1 });
     }
     if (count >= 5) {
-      this.gong({ delay: 0.02, vol: 0.3 });
-      this.drum({ delay: 0.02, vol: 0.4 });
+      this.gong({ delay: 0.02, vol: 0.32 });
+      this.drum({ delay: 0.02, vol: 0.44 });
     }
-    if (count >= 7) {
-      for (var k = 0; k < 4; k++) this.drum({ delay: 0.5 + k * 0.14, freq: 150, vol: 0.28 });
+    if (count >= 8) {
+      this.subDrop({ vol: 0.38, dur: 1 });
+      this.coinShower(900, 16);
+      for (var k = 0; k < 5; k++) this.drum({ delay: 0.45 + k * 0.13, freq: 150, vol: 0.3 });
+    }
+    if (count >= 11) this.coinShower(2000, 22);
+    if (count >= 14) {
+      for (var j = 0; j < 8; j++) this.gong({ delay: 0.3 + j * 0.42, vol: 0.2, dur: 2.6, freq: 120 + j * 9 });
     }
   };
 
@@ -440,25 +548,37 @@
   };
 
   AudioEngine.prototype.freeSpinsStart = function () {
-    this.gong({ vol: 0.42, dur: 4 });
-    for (var i = 0; i < 6; i++) this.drum({ delay: i * 0.13, freq: 120 + i * 12, vol: 0.34 });
-    for (var k = 0; k < 5; k++) this.pluck(note(k, 4), { delay: 0.35 + k * 0.1, dur: 0.8, vol: 0.22 });
+    this.riser(900);
+    this.gong({ delay: 0.9, vol: 0.55, dur: 5 });
+    this.subDrop({ delay: 0.9, vol: 0.5, dur: 1.4 });
+    for (var i = 0; i < 10; i++) this.drum({ delay: 0.9 + i * 0.12, freq: 115 + i * 10, vol: 0.38 });
+    for (var k = 0; k < 10; k++) this.pluck(note(k, 4), { delay: 1.2 + k * 0.09, dur: 1, vol: 0.24 });
+    this.coinShower(2400, 18);
   };
 
   AudioEngine.prototype.holdStart = function () {
-    this.gong({ freq: 176, vol: 0.36, dur: 3 });
-    for (var i = 0; i < 3; i++) this.bell(note(i * 2, 5), { delay: i * 0.1, dur: 0.6, vol: 0.2 });
+    this.riser(800);
+    this.gong({ delay: 0.8, freq: 176, vol: 0.5, dur: 4 });
+    this.subDrop({ delay: 0.8, vol: 0.45, dur: 1.2 });
+    for (var i = 0; i < 5; i++) this.bell(note(i, 5), { delay: 0.85 + i * 0.1, dur: 0.7, vol: 0.22 });
+    for (var k = 0; k < 6; k++) this.drum({ delay: 0.8 + k * 0.14, freq: 130, vol: 0.34 });
   };
 
+  /* 聚宝盆里锁定一枚钱币。streak 越大音越高，连锁感更强。 */
   AudioEngine.prototype.holdLock = function (streak) {
-    this.woodblock({ freq: 2400, vol: 0.18 });
-    this.bell(note(Math.min(4, streak || 0), 5), { dur: 0.7, vol: 0.22, ratio: 3.9, index: 2.6 });
+    var s = Math.min(9, streak || 0);
+    this.woodblock({ freq: 2400 + s * 130, vol: 0.2 });
+    this.bell(note(s % 5, 5 + (s > 4 ? 1 : 0)), { dur: 0.8, vol: 0.26, ratio: 3.9, index: 2.8 });
+    this.drum({ freq: 200 + s * 14, vol: 0.22, dur: 0.22 });
   };
 
   AudioEngine.prototype.grand = function () {
-    this.gong({ vol: 0.5, dur: 5 });
-    for (var i = 0; i < 14; i++) this.pluck(note(i, 4), { delay: i * 0.07, dur: 1, vol: 0.24 });
-    for (var k = 0; k < 8; k++) this.drum({ delay: k * 0.11, freq: 140, vol: 0.36 });
+    this.riser(1100);
+    this.gong({ delay: 1.1, vol: 0.62, dur: 6 });
+    this.subDrop({ delay: 1.1, vol: 0.6, dur: 1.8 });
+    for (var i = 0; i < 20; i++) this.pluck(note(i, 4), { delay: 1.15 + i * 0.062, dur: 1.2, vol: 0.26 });
+    for (var k = 0; k < 16; k++) this.drum({ delay: 1.1 + k * 0.1, freq: 140, vol: 0.4 });
+    this.coinShower(5000, 26);
   };
 
   /* ---- 背景音乐：五声音阶琶音 + 低音垫，免费游戏时加鼓与密度 ---- */

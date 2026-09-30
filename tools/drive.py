@@ -76,6 +76,28 @@ class Page:
             time.sleep(0.12)
         raise TimeoutError(f"等待超时: {label or expression}")
 
+    def press_while(self, condition, timeout=180, label="", shots=None):
+        """手动环节：只要游戏在等玩家按，就替玩家按下去，直到 condition 为假。
+        shots 是 {截图名: 触发表达式}，抓到一次就不再抓。"""
+        taken = set()
+        deadline = time.time() + timeout
+        presses = 0
+        while time.time() < deadline:
+            if shots:
+                for name, expr in list(shots.items()):
+                    if name not in taken and self.js(expr):
+                        self.shot(name)
+                        taken.add(name)
+            if not self.js(condition):
+                return presses
+            if self.js("window.__jinlong.awaitingPress"):
+                self.js("document.getElementById('spin-btn').click()")
+                presses += 1
+                time.sleep(0.25)
+            else:
+                time.sleep(0.15)
+        raise TimeoutError(f"手动环节没有结束: {label or condition}")
+
 
 def launch(width, height):
     profile = tempfile.mkdtemp(prefix="jinlong-cdp-")
@@ -193,24 +215,56 @@ def run(keep):
                 "document.getElementById('auto-btn').click()")
         page.wait_for("window.__jinlong.phase==='idle'", timeout=40, label="自动旋转停下")
 
+        print("[4b] 擦边球（最后一轴先差一点点停住）")
+        page.js("window.__teaseSeen=false;"
+                "window.ASTER_CONFIG.FEATURES.tease.chance = 1;")
+        page.js("document.getElementById('turbo-btn').click()")   # 关掉快速，看清楚
+        page.js("document.getElementById('spin-btn').click()")
+        deadline = time.time() + 30
+        teased = False
+        while time.time() < deadline:
+            if page.js("window.__jinlong.renderer.reels[4].teasing"):
+                page.shot("06b-tease")
+                teased = True
+                break
+            time.sleep(0.05)
+        if not teased:
+            failures.append("没有观察到擦边球（最后一轴的顿停）")
+        else:
+            print("    捕捉到擦边球顿停")
+        page.js("window.ASTER_CONFIG.FEATURES.tease.chance = 0.22")
+        page.wait_for("window.__jinlong.phase==='idle'", timeout=40, label="擦边球那一转结束")
+
         # 玩法触发是小概率事件，靠等运气不可靠 —— 直接把状态摆到触发点上，
         # 检查的是"表现层能不能正确演出来"，不是概率本身（概率由 sim.html 负责）。
-        print("[5] 强制触发聚宝盆")
+        print("[5] 强制触发聚宝盆（每次重转都要玩家自己按）")
         page.js("window.__jinlong.engine.charge = window.ASTER_CONFIG.FEATURES.charge.max - 1;"
                 "window.__jinlong.engine.strips = {base: window.ASTER_CONFIG.STRIPS.base.map(function(s,i){"
                 "  return i===0 ? s.map(function(){return 'C';}) : s;}),"
                 " free: window.ASTER_CONFIG.STRIPS.free};")
         page.js("document.getElementById('spin-btn').click()")
+        page.wait_for("document.getElementById('feature-card').classList.contains('show')",
+                      timeout=40, label="聚宝盆特写")
+        time.sleep(0.7)
+        page.shot("07-hold-intro")
         page.wait_for("document.getElementById('hold-hud').classList.contains('visible')",
                       timeout=40, label="聚宝盆开启")
-        time.sleep(1.2)
-        page.shot("07-hold")
-        page.wait_for("!document.getElementById('hold-hud').classList.contains('visible')",
-                      timeout=90, label="聚宝盆结束")
-        page.shot("08-hold-payout")
-        page.wait_for("window.__jinlong.phase==='idle'", timeout=40, label="聚宝盆结算完")
+        time.sleep(1.0)
+        page.shot("08-hold-board")
 
-        print("[6] 强制触发龙门免费游戏")
+        presses = page.press_while(
+            "document.getElementById('hold-hud').classList.contains('visible')",
+            timeout=180, label="聚宝盆",
+            shots={"09-hold-await": "window.__jinlong.awaitingPress",
+                   "10-hold-spinning": "document.getElementById('hold-hud').classList.contains('spinning')"})
+        print(f"    玩家手动按了 {presses} 次重转")
+        if presses < 1:
+            failures.append("聚宝盆没有出现需要玩家手动按的环节")
+        time.sleep(1.4)
+        page.shot("11-hold-finale")
+        page.wait_for("window.__jinlong.phase==='idle'", timeout=90, label="聚宝盆结算完")
+
+        print("[6] 强制触发龙门免费游戏（手动逐次按）")
         page.js("""
           var C = window.ASTER_CONFIG;
           window.__savedStrips = C.STRIPS.base.map(function (s) { return s.slice(); });
@@ -222,9 +276,8 @@ def run(keep):
         page.js("document.getElementById('spin-btn').click()")
         page.wait_for("document.getElementById('feature-card').classList.contains('show')",
                       timeout=40, label="龙门大开特写")
-        time.sleep(0.5)
-        page.shot("09-free-intro")
-        # 还原轮带，让免费游戏用正常盘面跑
+        time.sleep(0.8)
+        page.shot("12-free-intro")
         page.js("""
           var C = window.ASTER_CONFIG;
           C.STRIPS.base.forEach(function (s, i) {
@@ -233,17 +286,23 @@ def run(keep):
         """)
         page.wait_for("document.getElementById('free-hud').classList.contains('visible')",
                       timeout=40, label="免费游戏 HUD")
+        time.sleep(0.8)
+        page.shot("13-free-spins")
+
+        fs = page.press_while(
+            "document.getElementById('free-hud').classList.contains('visible')",
+            timeout=240, label="免费游戏")
+        print(f"    玩家手动按了 {fs} 次免费旋转")
+        if fs < 5:
+            failures.append(f"免费游戏只按了 {fs} 次，手动模式可能没生效")
         time.sleep(1.0)
-        page.shot("10-free-spins")
-        page.wait_for("!document.getElementById('free-hud').classList.contains('visible')",
-                      timeout=180, label="免费游戏结束")
-        page.shot("11-free-summary")
+        page.shot("14-free-summary")
 
         print("[7] 赔率弹窗")
         page.wait_for("window.__jinlong.phase==='idle'", timeout=60, label="回到空闲")
         page.js("document.getElementById('paytable-btn').click()")
         time.sleep(0.6)
-        page.shot("12-paytable")
+        page.shot("15-paytable")
         page.js("document.querySelector('[data-close=\"paytable-modal\"]').click()")
         time.sleep(0.4)
 
@@ -251,12 +310,16 @@ def run(keep):
         if errs:
             failures.append("页面报错: " + "; ".join(errs[:6]))
 
+        money_ok = page.js("document.getElementById('wallet').textContent.indexOf('$')===0")
+        if not money_ok:
+            failures.append("货币没有加上 $ 前缀")
+
         print("\n最终状态:", page.js(
             "JSON.stringify({wallet:wallet.textContent,session:session.textContent,"
             "spins:document.getElementById('spin-count').textContent,"
             "achv:document.getElementById('achievement-count').textContent,"
             "unlocked:Object.keys(window.__jinlong.state.achievements)})"))
-        page.shot("13-final")
+        page.shot("16-final")
 
     finally:
         if not keep:
