@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>金龙聚宝 · 重构设计文档（2026-09-30）</title>
+<style>
+  :root{--ink:#13070a;--gold:#e8b640;--gold-hi:#ffe08a;--red:#c0202c;--jade:#3fd1a0;
+        --text:#f2e4cd;--muted:#a89076;--line:rgba(232,182,64,.22)}
+  *{box-sizing:border-box}
+  body{margin:0;padding:48px 24px 80px;background:
+    radial-gradient(ellipse 70% 45% at 50% -6%,rgba(192,32,44,.22),transparent 60%),
+    linear-gradient(170deg,#1d090c,#13070a 50%,#180809);
+    color:var(--text);font:15px/1.75 "PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{max-width:900px;margin:0 auto}
+  h1{font:700 32px/1.3 "Noto Serif SC","Songti SC",serif;letter-spacing:.08em;margin:0 0 4px;
+     background:linear-gradient(180deg,#fff3cf,var(--gold) 60%,#a8741c);
+     -webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{color:var(--muted);font-size:13px;letter-spacing:.14em;margin:0 0 36px}
+  h2{font:700 19px/1.4 "Noto Serif SC","Songti SC",serif;letter-spacing:.12em;color:var(--gold);
+     margin:44px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h3{font:700 15px/1.4 system-ui,sans-serif;letter-spacing:.06em;color:var(--gold-hi);margin:26px 0 8px}
+  p{margin:0 0 12px}
+  ul,ol{margin:0 0 14px;padding-left:22px}
+  li{margin-bottom:6px}
+  code{background:rgba(232,182,64,.10);border:1px solid var(--line);border-radius:4px;
+       padding:1px 6px;font:13px/1.4 ui-monospace,Consolas,monospace;color:var(--gold-hi)}
+  table{width:100%;border-collapse:collapse;margin:0 0 18px;font-size:13.5px}
+  th,td{padding:8px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  th{color:var(--gold);font-weight:700;letter-spacing:.06em;white-space:nowrap}
+  td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .card{background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:12px;
+        padding:16px 20px;margin:0 0 18px}
+  .bad{border-left:3px solid #d8453f}
+  .good{border-left:3px solid var(--jade)}
+  .tag{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11px;letter-spacing:.06em;
+       border:1px solid var(--line);color:var(--gold);margin-right:6px}
+  .muted{color:var(--muted);font-size:13px}
+  a{color:var(--jade)}
+  img{max-width:100%;border-radius:10px;border:1px solid var(--line);display:block;margin:14px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>金龙聚宝 · 重构设计文档</h1>
+<p class="sub">2026-09-30　取代 2026-09-28「霓虹宇宙老虎机」</p>
+
+<h2>一、为什么推倒重来</h2>
+<p>上一版存在四个层面的问题，任何一个单独修补都不够：</p>
+
+<div class="card bad">
+<h3>1. 数值失控</h3>
+<p>实测 <strong>RTP 约 1269%</strong>。玩家每下注 1 枚平均拿回 12.7 枚，所以"一下子赚得停不下来"。
+根因有三：所有轮带共用一套过密的权重；免费游戏轮带上神龙多到几乎每转都整轴展开；
+免费游戏倍率累加到 8× 且会与旋转倍率复利，单次免费游戏平均产出 858× 下注。</p>
+</div>
+
+<div class="card bad">
+<h3>2. 盘面不是真的在转</h3>
+<p>上一版的"旋转"是每 38–54ms 用 <code>setInterval</code> 随机替换一批图标。
+老虎机的手感八成来自滚轮物理——加速、匀速、减速、过冲回弹、逐轴停止——
+这些一个都没有，所以怎么加特效都像在闪图片。</p>
+</div>
+
+<div class="card bad">
+<h3>3. 音效是裸振荡器</h3>
+<p>全部是不加包络、不加滤波、不加混响的方波/锯齿波，听感就是电子哔哔声。</p>
+</div>
+
+<div class="card bad">
+<h3>4. 主题与反馈</h3>
+<p>紫蓝霓虹星云在深色背景上对比度极低，图标剪影互相混淆；
+按钮只有 <code>transform: translateY(-1px)</code>，中奖只有一个飘字，没有奖级分层。</p>
+</div>
+
+<h2>二、主题：东方 · 招财瑞兽</h2>
+<p>配色 <span class="tag">墨底 #1a0607</span><span class="tag">鎏金 #e8b640</span>
+<span class="tag">朱红 #c0202c</span><span class="tag">翡翠 #0f8a5f</span></p>
+<p>暖色高对比，比原来的冷色霓虹在深底上好读得多；而且这个题材天然带着一整套
+剪影辨识度极高的物件。美术统一走<strong>金箔浮雕</strong>：主体金属渐变、底部压深色轮廓、
+顶部一道高光，剪影优先于细节。十个图标全部是 Canvas 矢量手绘，没有图片素材。</p>
+
+<h3>验收标准：56px 剪影测试</h3>
+<p><code>tools/symbols.html</code> 会把每个图标渲染成大图 / 实际盘面尺寸 / 56px 三档。
+只要 56px 下认不出来就重画。这一轮被打回重做的有四个：</p>
+<ul>
+  <li><strong>玉如意</strong>：灵芝云头缩小后糊成一根横杠，读作"水龙头"。<br>
+      → 换成<strong>玉葫芦</strong>。上小下大的双球剪影在任何尺寸都成立，"葫芦"谐音福禄，主题上同样站得住。</li>
+  <li><strong>元宝</strong>：没画出两只翘角，读作"面包"。→ 重做成「船体 + 两只上翘的角 + 中间宝颈」。</li>
+  <li><strong>貔貅</strong>：鬃毛绕满一整圈，读作"向日葵"。→ 鬃毛只绕下半圈当胡须，双角明确越过头顶。</li>
+  <li><strong>神龙</strong>：放射状尖刺鬃毛，读作"食蚁兽"。→ 改成向后飘的火焰卷，头颅加宽、吻部缩短。</li>
+</ul>
+<p class="muted">另外修掉一个真实 bug：<code>topGloss</code> 用 <code>source-atop</code> 合成，
+直接画在目标画布上会把高光糊到底板上，整个盘面因此发灰。改为先画进独立暂存画布再合成。</p>
+
+<h2>三、数值设计</h2>
+
+<h3>单一数值来源</h3>
+<p><code>js/config.js</code> 是唯一的数值来源，<code>js/engine.js</code> 是不碰 DOM 的纯逻辑引擎。
+游戏本体和 <code>tools/sim.html</code> 蒙特卡洛模拟器 <strong>import 的是同一份代码</strong>，
+所以文档里的 RTP 就是玩家实际遇到的 RTP，不存在"模型和实现对不上"。</p>
+
+<div class="card">
+<p class="muted">调参过程中踩到的坑：第一版模拟器自己写了个 xorshift 变体做随机源，
+连续取值之间有相关性，导致"多个特殊图标同屏"的概率被系统性低估 3–10 倍，
+一度让人以为是引擎有 bug。换成 mulberry32 之后数据才对上。
+<strong>模拟器的随机源本身必须先站得住。</strong></p>
+</div>
+
+<h3>结构参数</h3>
+<table>
+<tr><th>杠杆</th><th>取值</th><th>为什么</th></tr>
+<tr><td>轮带长度</td><td class="n">59–61</td><td>配合 2 格金锣权重，把免费游戏触发率压到约 1/110</td></tr>
+<tr><td>堆叠</td><td class="n">低分 2–3 格</td><td>总数不变，但"中了就中一大片"：命中率下降、单次 Ways 数上升，这是中高波动的主要来源</td></tr>
+<tr><td>神龙分布</td><td class="n">仅 2/3/4 轮，各 1 格</td><td>第 1 轮永远需要真实图标 → 杜绝纯 Wild 中奖；同时让神龙落轴本身变成事件</td></tr>
+<tr><td>免费游戏倍率</td><td class="n">起 2×，每中奖 +1×，封顶 5×</td><td>上一版封顶 8× 且轮带过热，单次产出 858×</td></tr>
+<tr><td>单转封顶</td><td class="n">2500×</td><td>触顶时明确告知玩家，不悄悄砍掉</td></tr>
+</table>
+
+<h3>赔付表（每一条 Ways，× 下注）</h3>
+<p class="muted">实际赔付 = 下表数值 × Ways 数（最高 243）× 倍率。数值看起来小是 243 Ways 的正常量级。</p>
+<table>
+<tr><th>图标</th><th class="n">3 连</th><th class="n">4 连</th><th class="n">5 连</th></tr>
+<tr><td>铜钱</td><td class="n">0.03×</td><td class="n">0.09×</td><td class="n">0.32×</td></tr>
+<tr><td>福字</td><td class="n">0.05×</td><td class="n">0.15×</td><td class="n">0.48×</td></tr>
+<tr><td>宫灯</td><td class="n">0.07×</td><td class="n">0.21×</td><td class="n">0.75×</td></tr>
+<tr><td>玉葫芦</td><td class="n">0.09×</td><td class="n">0.30×</td><td class="n">1.15×</td></tr>
+<tr><td>锦鲤</td><td class="n">0.15×</td><td class="n">0.48×</td><td class="n">2.10×</td></tr>
+<tr><td>元宝</td><td class="n">0.30×</td><td class="n">1.05×</td><td class="n">4.60×</td></tr>
+<tr><td>貔貅</td><td class="n">0.65×</td><td class="n">2.40×</td><td class="n">13.0×</td></tr>
+</table>
+<p class="muted">流程是：先把结构（轮带、堆叠、玩法参数）定死，测出各项 RTP 构成，
+再对整张赔付表做线性缩放收敛到目标 95%。赔付表线性缩放不会改变命中率和波动性，
+所以只需要一到两轮迭代。</p>
+
+<h3>实测结果（2800 万次旋转，3 个随机种子）</h3>
+<table>
+<tr><th>指标</th><th class="n">值</th><th>目标</th></tr>
+<tr><td>RTP</td><td class="n">95.6%</td><td>≈95%　✓</td></tr>
+<tr><td>命中率（按轮）</td><td class="n">21.0%</td><td>≈22%　✓</td></tr>
+<tr><td>├ 低于下注的部分</td><td class="n">13.4%</td><td>不做庆祝</td></tr>
+<tr><td>单轮标准差</td><td class="n">16.0</td><td>中高波动　✓</td></tr>
+<tr><td>最大单转</td><td class="n">2500×</td><td>封顶生效　✓</td></tr>
+<tr><td>龙门免费游戏</td><td class="n">1/110 转</td><td>平均产出 37×</td></tr>
+<tr><td>聚宝盆</td><td class="n">1/81 转</td><td>平均 12.8× / 6.8 枚</td></tr>
+<tr><td>大满贯</td><td class="n">1/31,000 转</td><td>足够稀有</td></tr>
+</table>
+
+<h3>RTP 构成</h3>
+<table>
+<tr><th>来源</th><th class="n">占比</th></tr>
+<tr><td>基础游戏 243 Ways</td><td class="n">48.8%</td></tr>
+<tr><td>免费游戏 243 Ways</td><td class="n">30.7%</td></tr>
+<tr><td>聚宝盆（基础 + 免费）</td><td class="n">17.0%</td></tr>
+<tr><td>金锣 / 钱币散赔</td><td class="n">2.4%</td></tr>
+</table>
+
+<h2>四、特殊玩法</h2>
+
+<h3>神龙 · 整轴扩展百搭</h3>
+<p>落在第 2/3/4 轮后整轴展开。<strong>金锣和招财钱币的计数在展开之前结算</strong>，
+所以神龙覆盖一整轴时不会吃掉玩家已经看到的锣或钱币——这是手感问题，不是数学问题。</p>
+
+<h3>特殊组合</h3>
+<table>
+<tr><th>组合</th><th>条件</th><th>效果</th><th class="n">频率</th></tr>
+<tr><td>双龙戏珠</td><td>2 条神龙同屏</td><td>本次旋转 2×，龙气 +12</td><td class="n">1/117</td></tr>
+<tr><td>三龙聚顶</td><td>3 条神龙同屏</td><td>本次旋转 3×，<strong>龙气直接充满</strong></td><td class="n">1/5,263</td></tr>
+<tr><td>满堂金</td><td>≥3 枚招财钱币</td><td>龙气额外 +6</td><td class="n">1/276</td></tr>
+<tr><td>龙锣共鸣</td><td>2 个金锣 + ≥1 条神龙</td><td>神龙化锣，补足触发免费游戏</td><td class="n">1/186</td></tr>
+</table>
+<p class="muted">这四个构成一条清晰的稀有度阶梯。设计时特意避开了"频率高到变成常态"的档位——
+龙锣共鸣最初设定为"2 锣 + 任意 1 龙 → 补一个锣"，实测 1/75，
+比直接 3 锣触发还频繁，等于把免费游戏触发率翻倍，于是把金锣权重整体下调重新配平。</p>
+
+<h3>隐藏龙气条 → 聚宝盆</h3>
+<p>龙气<strong>不显示任何数字</strong>：只有一条会发光的鳞片进度条，和「静待 / 聚气中 / 龙气渐盛 / 将满·蓄势待发」
+四段定性文字。进度条上压了一层斜向鳞片纹理，视觉上也读不出精确刻度，只能感觉到"在涨"。
+超过 78% 时整条开始呼吸发光，快满时呼吸加速。</p>
+<p>充满后进入聚宝盆（Hold &amp; Spin）——这是东方主题老虎机最具代表性的机制：
+盘面清空，落下的钱币锁定并带有面值，初始 3 次重转，每次落新币就重置回 3 次，
+填满 15 格额外奖励 200×。引擎会一次性算出完整"剧本"（每一轮落了哪些格、剩几次重转），
+表现层照着逐步播放，所以演出和结算不可能对不上。</p>
+
+<img src="../images/holdspin.png" alt="聚宝盆">
+
+<h3>龙门免费游戏</h3>
+<p>3/4/5 个金锣 → 8/12/18 次。起始 2× 倍率，每有一次中奖旋转 +1×（上限 5×），
+期间再出 3 个金锣 +5 次。用独立轮带：神龙翻倍、钱币更多、低分图标更少。</p>
+
+<img src="../images/freespins.png" alt="龙门免费游戏">
+
+<h2>五、表现层</h2>
+
+<h3>真实滚轮</h3>
+<p>每一轴在自己的轮带上按速度曲线滚动：12% 加速 / 58% 匀速 / 30% 减速，
+积分归一化后用<strong>"先定路程再解速度"</strong>的方式驱动，保证每一轴都精确停在目标格上。
+停下后有一次过冲回弹（往下顶出 0.17 格再弹回）。</p>
+
+<h3>方向性动态模糊</h3>
+<p>滚轮只在垂直方向运动，所以用 <code>filter: blur()</code> 是错的（它是各向同性的）。
+这里把图标沿纵向叠印 9 份生成模糊图集，分三档：全速糊成一条、减速段软一点、
+一旦停下（含回弹）立刻清晰。图集在 resize 时预生成，每帧只是 <code>drawImage</code>。</p>
+
+<h3>期待（anticipation）</h3>
+<p>前面的轴已经落了 2 个金锣时，下一轴会额外多转 1.5–2.9 秒，配合边框脉冲、
+升调滑音和心跳鼓。<strong>结果在动画开始前就已经确定</strong>，所以这个期待只在
+真的还有机会时触发——不制造假的擦边球。</p>
+
+<h3>音频：全部实时合成</h3>
+<p>没有任何音频素材文件。让它不再像电子哔哔声的三个关键：</p>
+<ol>
+  <li>所有音色都走 ADSR 包络 + 低通滤波，而不是裸振荡器；</li>
+  <li>有一条<strong>程序生成脉冲响应</strong>的混响总线（指数衰减噪声 + 简易低通），
+      所有声音落在同一个空间里；</li>
+  <li>旋律锁在<strong>五声音阶</strong>（宫商角徵羽）上，随便弹都是中国味。</li>
+</ol>
+<table>
+<tr><th>音色</th><th>合成方式</th></tr>
+<tr><td>古筝拨弦（停轮、中奖琶音）</td><td>两个失谐锯齿波过共振低通，快速衰减，加一层起音噪声</td></tr>
+<tr><td>锣（Scatter、大奖）</td><td>6 个<strong>非整数倍</strong>分音 + 噪声，长衰减，重混响——非谐波是金属感的来源</td></tr>
+<tr><td>太鼓</td><td>正弦下滑 + 低通噪声皮革声</td></tr>
+<tr><td>铃（钱币、计数）</td><td>FM 合成，调制指数随包络衰减</td></tr>
+<tr><td>龙吟</td><td>锯齿波扫频过高 Q 值低通 + 鼓 + 锣叠加</td></tr>
+<tr><td>背景乐</td><td>五声音阶琶音 + 低音垫，前瞻式调度；免费游戏时加鼓层、提速、抬音量</td></tr>
+</table>
+
+<h3>奖级分层</h3>
+<table>
+<tr><th>倍数</th><th>表现</th></tr>
+<tr><td>&lt; 1×</td><td><strong>灰色小字，无任何庆祝</strong></td></tr>
+<tr><td>1–10×</td><td>结算行高亮 + 短琶音 + 余额滚动</td></tr>
+<tr><td>10×+ 大奖</td><td>横幅特写 + 礼花 + 震屏 + 锣 + 鼓</td></tr>
+<tr><td>25×+ 巨奖</td><td>加金币雨，横幅数字持续搏动</td></tr>
+<tr><td>50×+ 超级巨奖</td><td>粒子加倍、震屏加强</td></tr>
+<tr><td>100×+ 神话降临</td><td>最长演出，标题换白金配色</td></tr>
+</table>
+
+<h2>六、刻意没有抄的部分</h2>
+<div class="card good">
+<h3>LDW（losses disguised as wins）</h3>
+<p>赢的钱少于下注（占 13.4% 的轮次）时，真实老虎机会照样放铃声和礼花，
+让一次净亏损感觉像赢了。这里<strong>完全不播庆祝</strong>：不弹横幅、不放礼花、不奏乐，
+只用灰色小字写一行结果。</p>
+<h3>假的擦边球（engineered near miss）</h3>
+<p>真实机器会刻意让中奖符号停在支付线上下一格。这里的"期待"只在结果确定为
+真的还有机会时触发。</p>
+<p class="muted">这两项是学术界和监管明确点名的成瘾机制。既然这是个纯虚拟币的解压游戏，
+留着它们只有坏处。其余可迁移的技巧——逐轴停止、奖级分层、数字滚动、期待铺垫——全部保留。</p>
+</div>
+
+<h2>七、验证</h2>
+<table>
+<tr><th>工具</th><th>验证什么</th></tr>
+<tr><td><code>tools/sim.html</code></td><td>RTP / 命中率 / 波动性 / 逐图标贡献 / 玩法频率 / 回报分布。跑的是游戏本体同一份引擎</td></tr>
+<tr><td><code>tools/symbols.html</code></td><td>图标在 56px 下的剪影辨识度</td></tr>
+<tr><td><code>tools/drive.py</code></td><td>端到端：CDP 驱动真实渲染的 Chrome，点按钮、等状态、逐场景截图、收集页面报错</td></tr>
+</table>
+<p class="muted">为什么端到端要用 CDP 而不是 <code>chrome --headless --screenshot</code>：
+后者模式下 requestAnimationFrame 一秒只推进 1–2 帧，滚轮动画、中奖高亮、聚宝盆一个都截不到
+（实测确认）。接上 DevTools Protocol 之后是稳定的 61 fps。</p>
+<p class="muted">免费游戏和聚宝盆是小概率事件，靠等运气不可靠。
+<code>drive.py</code> 直接把引擎状态摆到触发点上（龙气设为满 −1、临时替换轮带），
+检查的是"表现层能不能正确演出来"；概率本身由 <code>sim.html</code> 负责。</p>
+
+<h2>八、参考</h2>
+<ul>
+  <li>Twin Win Games — <a href="https://twinwingames.com/casino-math/">Casino Mathematics: Probability and Profit</a></li>
+  <li>TIG Games — <a href="https://www.tiggames.com/hire-slot-game-mathematicians/">RTP &amp; Volatility Modeling</a>（轮带 / 赔付 / 玩法数学的拆分流程）</li>
+  <li>Slot Designer — <a href="http://slotdesigner.com/wp/wp-content/uploads/Elements-of-Slot-Design-2nd-Edition.pdf">Elements of Slot Design</a>（Ways vs Paylines、堆叠对波动性的影响）</li>
+  <li>1spin4win — <a href="https://www.1spin4win.com/blog/wild-symbols-in-slots">Wild symbols in slot machines: types and functionality</a></li>
+  <li>NCBI — <a href="https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7214505/">The Near-Miss Effect in Slot Machines: A Review and Experimental Analysis</a></li>
+  <li>Covers — <a href="https://www.covers.com/casino/guides/slot-machine-symbols-explained">Slot Symbols Guide: Wilds, Scatters &amp; Bonuses</a></li>
+</ul>
+
+<p class="muted" style="margin-top:48px">所有金币均为虚拟，仅保存在浏览器 localStorage。
+不接入账号、支付、充值、提现或任何形式的兑换。</p>
+
+</div>
+</body>
+</html>

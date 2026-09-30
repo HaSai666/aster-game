@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aster Game · 霓虹地下牌局设计</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0c101c; --panel:#151d2f; --text:#eaf0fc; --muted:#acbad0; --cyan:#6ce4de; --purple:#bda2ff; --line:#34415c; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:16px/1.8 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
+    main { max-width:1120px; margin:auto; padding:48px 24px 80px; }
+    header { padding:32px; border:1px solid var(--line); border-top:4px solid var(--cyan); background:linear-gradient(120deg,#172d37,#231d3e); border-radius:18px; }
+    h1 { font-size:clamp(30px,5vw,48px); line-height:1.25; margin:12px 0; } h2 { margin:0 0 18px; font-size:25px; } h3 { font-size:19px; margin:0 0 10px; }
+    p { margin:10px 0; } a { color:var(--cyan); } strong { color:#fff; }
+    .eyebrow { color:var(--cyan); letter-spacing:.12em; font-size:13px; } .muted, small { color:var(--muted); }
+    nav { display:flex; flex-wrap:wrap; gap:10px 22px; padding:22px 0; }
+    section { margin:24px 0; padding:28px; border:1px solid var(--line); border-radius:16px; background:var(--panel); }
+    .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
+    .card { padding:20px; border:1px solid var(--line); border-radius:12px; background:#101827; }
+    .selected { border-color:var(--cyan); } .tag { color:var(--cyan); font-size:13px; } .note { border-left:3px solid var(--purple); padding:10px 18px; background:#211f35; }
+    .table-wrap { overflow-x:auto; } table { width:100%; border-collapse:collapse; margin:14px 0; text-align:left; } th,td { border-bottom:1px solid var(--line); padding:12px; vertical-align:top; } th { color:var(--cyan); }
+    ul,ol { padding-left:24px; } li { margin:7px 0; } pre { white-space:pre-wrap; overflow-wrap:anywhere; padding:20px; background:#0c1220; border-radius:10px; font:14px/1.8 ui-monospace,Consolas,monospace; }
+    .mockups { display:grid; grid-template-columns:1.7fr 1fr; gap:20px; align-items:start; }
+    .wire { background:#0c1422; padding:16px; border:1px solid #52627a; border-radius:16px; } .wire-top { display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; font-size:13px; color:var(--muted); }
+    .seats { display:flex; justify-content:space-around; gap:10px; margin:18px 0; } .seat { border:1px solid var(--line); border-radius:10px; padding:10px; text-align:center; font-size:13px; } .active { border-color:var(--cyan); }
+    .felt { background:#102d32; border:2px solid #3e6570; border-radius:40px; padding:24px 12px; text-align:center; }
+    .cards { display:flex; justify-content:center; gap:7px; margin:12px 0; } .playing-card { display:inline-block; border-radius:5px; background:#f0f3f8; color:#182234; padding:12px 9px; font-weight:700; } .red { color:#ab2948; } .back { color:#d1baff; background:#343051; }
+    .actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; } .action { flex:1; padding:8px; text-align:center; border:1px solid #62718d; border-radius:7px; font-size:13px; } .primary { background:#173f42; border-color:var(--cyan); }
+    .log { font-size:13px; color:var(--muted); border-top:1px solid var(--line); margin-top:16px; padding-top:12px; } .own { margin-top:14px; text-align:center; } footer { color:var(--muted); padding-top:12px; }
+    @media(max-width:760px) { main { padding:20px 12px 48px; } section,header { padding:20px; } .grid,.mockups { grid-template-columns:1fr; } th,td { min-width:110px; padding:9px; } }
+    @media print { :root { color-scheme:light; } body,section,header,.card { background:white; color:#172033; } strong,h1,h2,h3 { color:#172033; } section { break-inside:avoid; } nav { display:none; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">ASTER GAME / DESIGN / 2026-09-11</div>
+    <h1>霓虹地下牌局</h1>
+    <p>德州的下注与诈唬，加上保密的肉鸽构筑。朋友同桌竞争，每个阶段都有重新争胜的机会。</p>
+    <p><strong>1–5 名真人 · 固定 5 人桌 · Bot 补位 · 25 手 · 目标 30–45 分钟</strong></p>
+    <p class="muted">局域网浏览器游戏，房主电脑运行服务。玩法、交互、视听和联机方向已逐节确认；本文为待最终审阅的设计文档，不代表游戏已经实现。</p>
+  </header>
+  <nav aria-label="文档导航"><a href="#decisions">方案与边界</a><a href="#loop">比赛规则</a><a href="#abilities">能力构筑</a><a href="#experience">操作与示意</a><a href="#av">视听方向</a><a href="#architecture">架构与联机</a><a href="#validation">验证与后续</a></nav>
+
+  <section id="decisions">
+    <h2>01 / 方案与产品边界</h2>
+    <div class="grid">
+      <article class="card selected"><div class="tag">已选择 · 成长与经营兼顾</div><h3>短阶段成长赛</h3><p>5 阶段 × 5 手。开局及前四阶段结束时三选一，共获得 5 个能力。</p><p>每阶段每个座位当一次庄，成长频繁。25 手的真实耗时需试玩验证。</p></article>
+      <article class="card"><div class="tag">备选 · 更重筹码经营</div><h3>长阶段经营赛</h3><p>3 阶段 × 10 手。开局及阶段间选能力，共获得 3 个能力。</p><p>跨手决策更充分，但成长间隔长，肉鸽体验出现得较慢。</p></article>
+      <article class="card"><div class="tag">备选 · 更快形成构筑</div><h3>快速构筑赛</h3><p>5 阶段 × 3 手，能力选择节奏与短阶段方案一致。</p><p>总手数少，但单阶段庄位不均，排名更受发牌运气影响。</p></article>
+    </div>
+    <p>目标体验：玩家既读底牌与下注，也根据公开动作推测对方构筑；能力明显改变策略，标准德州牌型与下注骨架保持稳定。</p>
+    <dl>
+      <dt><strong>首版包含</strong></dt><dd>局域网开房、电脑和手机浏览器、Bot 补位、完整积分赛、隐藏能力、断线回桌、霓虹视听反馈。</dd>
+      <dt><strong>首版边界</strong></dt><dd>不包含公网匹配、异地一键联机、账号与长期成长、商店、能力升级、观战席、房主迁移或中断存档恢复。局内筹码与积分仅服务比赛。</dd>
+      <dt><strong>当前项目</strong></dt><dd>仓库目前只有 README 和初始提交，没有需要兼容的现有游戏实现。</dd>
+    </dl>
+  </section>
+
+  <section id="loop">
+    <h2>02 / 一场比赛如何进行</h2>
+    <pre>房主启动服务 → 浏览器入座 → Bot 补足 5 人 → 开局三选一
+    ↓
+阶段开始：每人 1,000 筹码，补发记录归零
+    ↓
+连续 5 手德州：庄位逐手顺移，输光者下一手补筹码
+    ↓
+按调整后筹码排名 → 发放阶段积分
+    ├─ 第 1–4 阶段：同时三选一 → 下一阶段
+    └─ 第 5 阶段：累计积分 → 最终排名</pre>
+    <div class="table-wrap"><table><thead><tr><th>项目</th><th>规则</th></tr></thead><tbody>
+      <tr><td>座位与庄位</td><td>固定 5 个座位，开局随机确定庄位，之后每手顺移一位。开赛后固定席位，不开放新玩家中途替换 Bot；原玩家可重连。</td></tr>
+      <tr><td>基础德州</td><td>标准 52 张牌、无大小王；每人两张底牌，共五张公共牌，七选五比较标准牌型，花色不分大小。采用无限注德州，包含最小加注、短码全押与边池规则。</td></tr>
+      <tr><td>盲注与筹码</td><td>每阶段初始 1,000，小盲／大盲 10／20，整场固定，无前注。筹码采用整数单位。具体数值是首轮试玩基准。</td></tr>
+      <tr><td>补筹码</td><td>只给手牌结算后余额为 0 的座位补发；下一手开始前补至 1,000，累计记录本阶段补发额。余额大于 0 不补发。阶段最后一手后直接结算，不做无意义补发。</td></tr>
+      <tr><td>阶段成绩</td><td>排名筹码 = 剩余筹码 − 本阶段累计补发额，允许负数。补发既不改变已结束的底池，也不清除输牌代价。</td></tr>
+      <tr><td>积分</td><td>第一至第五得 5／3／2／1／0 分。筹码成绩并列，平分所占名次积分；内部保留精确值，不用显示舍入值判断胜负。</td></tr>
+      <tr><td>阶段重置</td><td>筹码统一恢复 1,000，补发记录清零。已获得能力和总积分保留；能力的阶段次数及阶段资源按定义重置。</td></tr>
+      <tr><td>最终排名</td><td>五阶段总积分降序，总分相同共享名次，不额外加赛。Bot 参与同一计分与排名。</td></tr>
+    </tbody></table></div>
+    <p><strong>补发示例：</strong>输光 1,000，补发 1,000 后结束时剩 1,400，排名筹码为 400。拿补发筹码继续玩仍需承担此前损失。</p>
+    <p><strong>并列示例：</strong>两人并列第二，各得 (3 + 2) ÷ 2 = 2.5 分；三人并列第三，各得 (2 + 1 + 0) ÷ 3 = 1 分。</p>
+    <p>平分底池时，无法均分的整数余筹按庄位左侧起的座位顺序分给对应获胜者。无人跟注时不强制亮牌；进入摊牌时公开仍参与争夺底池者的底牌，已弃牌者保持保密。</p>
+    <p class="note">阶段末为抢名次而冒险全押属于本设计接受的策略。试玩重点检查其是否压倒其他打法。30–45 分钟是目标，20 秒逐次行动仍可能让部分牌局超过目标时长。</p>
+  </section>
+
+  <section id="abilities">
+    <h2>03 / 保密构筑与能力边界</h2>
+    <ul>
+      <li>每次独立提供 3 个不同能力，排除自己已有能力；不同玩家可拥有相同能力。首版没有稀有度、刷新、升级或背包替换。</li>
+      <li>开局选一次，前四阶段结束后各选一次，最终携带 5 个能力。能力应独立可用，组合后拓展打法。</li>
+      <li>主动能力仅在本人下注行动前发动，每次行动最多一个；之后仍须下注或弃牌，使用能力不重置计时。全押后自动发牌期间不提供能力窗口。</li>
+      <li>能力列表、触发条件、剩余次数及积攒资源只对本人显示。必要动作进入公开记录，私密结果仅发送给本人。</li>
+      <li>换牌从当前剩余牌堆取牌，旧牌移入本手弃置区，不再抽回；查看不会取走或改动牌。首版能力不直接生成筹码。</li>
+    </ul>
+    <div class="table-wrap"><table><thead><tr><th>能力示例</th><th>效果与时机</th><th>公开信息</th></tr></thead><tbody>
+      <tr><td>换手</td><td>每阶段一次；翻牌后，在自己的合法行动窗口选择一张底牌随机换掉。</td><td>“某玩家换了 1 张底牌”。新旧牌及能力名称保密。</td></tr>
+      <tr><td>忍耐</td><td>每主动弃牌两次获得一次换牌机会，最多存一次，阶段结束清空。机会沿用换手的发动时机；储存已满时暂停积攒，消耗后重新从零积攒。超时自动弃牌不计入。</td><td>正常弃牌记录；真正换牌时显示通用换牌记录，来源保密。</td></tr>
+      <tr><td>侦察</td><td>每阶段一次，在自己的合法行动窗口选择一名仍在本手的对手，随机查看其一张当前底牌。该信息是查看时的快照，不随对方后续换牌更新。</td><td>“某玩家侦察了某玩家”，具体牌仅本人可见。</td></tr>
+    </tbody></table></div>
+    <p>这些是已认可的强度示例，不是完整能力库。五次均提供三个未拥有选项，能力库至少需要 7 个不同能力；只有上述 3 个示例不足以实现完整构筑流程。完整目录属于后续内容设计工作，须逐项定义时机、资源、公开范围、组合与 Bot 用法。</p>
+    <p>为避免选择信息泄漏，其他玩家只看到是否选完，不能看到候选项。通用公开动作可能帮助对手推测流派，这是预期博弈；视觉和声音不额外暴露具体能力标识。</p>
+  </section>
+
+  <section id="experience">
+    <h2>04 / 操作、节奏与牌桌示意</h2>
+    <p>电脑展示完整牌桌；手机优先竖屏，始终可读的公共牌、底池、当前行动者与底部操作区优先于装饰。以下为静态布局示意，金额仅演示信息层级，不代表真实牌局快照。</p>
+    <div class="mockups">
+      <article class="wire" aria-label="电脑版牌桌线框">
+        <h3>电脑 / 完整牌桌</h3><div class="wire-top"><span>阶段 2 / 5 · 本阶段第 3 手</span><span>音乐 · 音效 · 设置</span></div>
+        <div class="seats"><div class="seat">玩家 A<br>1,180</div><div class="seat active">玩家 B · 行动中<br>860</div><div class="seat">Bot C<br>1,060</div><div class="seat">Bot D<br>940</div></div>
+        <div class="felt"><span>公共牌 · 底池 240</span><div class="cards"><span class="playing-card">A♠</span><span class="playing-card red">8♥</span><span class="playing-card">4♣</span><span class="playing-card back">◆</span><span class="playing-card back">◆</span></div><small>庄位与各座位本轮下注清楚标注</small></div>
+        <div class="own">你 · 960<div class="cards"><span class="playing-card">K♠</span><span class="playing-card red">Q♥</span></div><small>我的能力：换手 · 忍耐（仅自己可见）</small></div>
+        <div class="actions"><span class="action">弃牌</span><span class="action">过牌 / 跟注</span><span class="action primary">加注金额</span><span class="action">使用能力</span></div>
+        <div class="log">公开记录：玩家 A 换了 1 张底牌 · 玩家 B 跟注 20</div>
+      </article>
+      <article class="wire" aria-label="手机版牌桌线框">
+        <h3>手机 / 竖屏</h3><div class="wire-top"><span>阶段 2 / 5 · 第 3 手</span><span>设置</span></div>
+        <div class="seats"><div class="seat">A · 1,180<br>C · 1,060</div><div class="seat active">B · 行动中<br>D · 940</div></div>
+        <div class="felt">底池 240<div class="cards"><span class="playing-card">A♠</span><span class="playing-card red">8♥</span><span class="playing-card">4♣</span></div><small>转牌、河牌尚未发出</small></div>
+        <p class="log">玩家 A 换了 1 张底牌 · 查看记录</p><div class="own">你 · 960<div class="cards"><span class="playing-card">K♠</span><span class="playing-card red">Q♥</span></div><span class="tag">我的能力（2）· 点开详情</span></div>
+        <div class="actions"><span class="action">弃牌</span><span class="action">跟注</span><span class="action primary">加注</span></div><small>操作区固定底部，避开系统安全区</small>
+      </article>
+    </div>
+    <ul>
+      <li>下注提供快捷金额及手动输入；服务端决定合法的最小／最大金额。全押需二次确认。轮到自己前操作按钮禁用。</li>
+      <li>每次行动 20 秒，能力选择与发动计入同一窗口；超时有合法过牌则过牌，否则弃牌。Bot 通常在 1–2 秒内行动。</li>
+      <li>构筑同时进行，限时 30 秒，全员选完提前继续；超时由服务端从该玩家本次候选中随机选一项。可以随时查看自己已有能力。</li>
+      <li>阶段结算显示剩余筹码、补发扣除、排名、本阶段得分和总积分；信息在后续比赛中仍可回看。结算展示暂定 8 秒，再进入选择或最终结果。</li>
+      <li>点“加入牌局”时尝试启用音频；如果浏览器仍拦截，显示明确的启用声音按钮。BGM、音效独立调节和静音。</li>
+    </ul>
+  </section>
+
+  <section id="av">
+    <h2>05 / 霓虹地下牌局的视听体验</h2>
+    <p>以深蓝黑空间、深色绒面牌桌、青紫灯光和精致卡牌形成统一气质。高对比牌面与金额承担信息，灯带与短促反馈承担气氛。</p>
+    <div class="table-wrap"><table><thead><tr><th>场景</th><th>画面反馈</th><th>声音反馈</th></tr></thead><tbody>
+      <tr><td>大厅与选能力</td><td>轻微环境光变化，能力卡片聚焦与选择确认。</td><td>舒缓电子爵士；选择时短促确认声。</td></tr>
+      <tr><td>发牌与下注</td><td>卡牌滑入、翻面，筹码汇入底池，行动座位灯带亮起。</td><td>纸牌声与筹码碰撞，操作确认声简洁。</td></tr>
+      <tr><td>转牌与河牌</td><td>公共牌清晰揭示，不用长动画拖延后续决策。</td><td>平滑增加节奏或氛围层，只由公开阶段驱动。</td></tr>
+      <tr><td>能力发动</td><td>本人显示完整效果，对手只显示对应公开动作的通用效果。</td><td>公开音效同样通用；私密音效仅本机播放。</td></tr>
+      <tr><td>全押与结算</td><td>短促强化光效、筹码归属动画、阶段积分变化与冠军庆祝。</td><td>全押提示、获胜短句与结算声，关键提示时压低 BGM。</td></tr>
+    </tbody></table></div>
+    <p>音乐至少覆盖准备、对局和结算情境，使用可循环且衔接自然的素材或分层编曲。音效至少覆盖发牌、翻牌、筹码、过牌／弃牌、能力公开动作、轮到自己、计时提醒和结算。具体曲目尚未选定，本文不表示已经制作或取得素材授权。</p>
+    <p>采用授权明确、允许随游戏分发的素材并保留来源及许可证。音频、字体和美术随游戏本地提供，无 CDN 或在线播放依赖；客户端声音由自己的音量设置控制。</p>
+    <p>动画不延长服务端行动期限。手机降低粒子、模糊和光效，提供减少动态效果选项；页面返回前台后跳过旧动画。目标是正常设备上操作流畅，优先保证触控响应、卡牌与金额可读。</p>
+  </section>
+
+  <section id="architecture">
+    <h2>06 / 房主权威架构与数据边界</h2>
+    <p>房主电脑运行一个本地服务，同时提供网页、静态素材和实时房间连接。朋友在相同局域网打开房主地址；房主界面展示可复制地址和入局二维码。电脑需保持运行，网络需允许设备互通；来宾 Wi-Fi 的设备隔离或本机防火墙可能阻止连接，启动说明需覆盖这两项排查。</p>
+    <pre>电脑浏览器 ─┐
+手机浏览器 ─┼─ 操作请求 / 实时状态 ─→ 房主电脑的本地服务
+房主浏览器 ─┘                            │
+                                        ├─ 房间与座位 / 重连 / 权威计时
+                                        ├─ 比赛状态机 / 德州规则 / 能力规则
+                                        ├─ Bot：只接收自己的可见信息
+                                        └─ 按座位过滤状态
+                                               ↓
+                           公共状态 + 该座位私密状态 → 对应浏览器
+
+本地静态素材 ─→ 各浏览器的界面、动画与声音</pre>
+    <div class="table-wrap"><table><thead><tr><th>模块</th><th>职责与接口</th><th>依赖</th></tr></thead><tbody>
+      <tr><td>德州规则核心</td><td>输入牌局状态和动作，输出新状态与事件；负责合法下注、发牌、摊牌及边池。</td><td>可替换的随机源、牌型计算；不依赖浏览器或网络。</td></tr>
+      <tr><td>能力规则</td><td>声明触发窗口、消耗、目标、效果和公开范围，通过规则核心执行换牌等受控操作。</td><td>受限牌局接口与能力定义；不直接发送网络消息。</td></tr>
+      <tr><td>比赛流程</td><td>推进 5 × 5 流程、三选一、补发、重置及积分结算，生成阶段事件。</td><td>德州核心与能力规则。</td></tr>
+      <tr><td>房间与连接</td><td>管理座位凭据、动作去重、版本、计时、重连和 Bot 接管，向流程提交合法来源请求。</td><td>比赛流程、服务端时钟、状态过滤器。</td></tr>
+      <tr><td>状态过滤</td><td>从完整状态生成公共视图及指定座位私密视图；公开事件剔除隐藏字段。</td><td>状态模型与能力公开范围。</td></tr>
+      <tr><td>陪玩 Bot</td><td>根据本人视图、合法动作和保守／激进／跟注风格作出选择，使用同一操作入口。</td><td>过滤后的信息；不能读取完整牌堆或对手秘密。</td></tr>
+      <tr><td>浏览器呈现</td><td>渲染响应式牌桌，发送用户意图，将可见事件转为动画和声音。</td><td>本人状态与可见事件；不裁定胜负或随机结果。</td></tr>
+    </tbody></table></div>
+    <details><summary>供后续实现参考的消息形状（逻辑接口，不限定技术栈）</summary><pre>ActionRequest { actionId, expectedVersion, actionType, payload }
+  座位身份由连接凭据确定，不能信任客户端声称的 seatId。
+
+SeatSnapshot { version, phase, deadline, publicState, selfState }
+  publicState: 座位、筹码、下注、公共牌、底池、公开动作、积分。
+  selfState: 本人底牌、能力、次数、资源、私密查看结果、候选能力。
+
+ActionResult { actionId, accepted, errorCode, currentVersion }
+  重复 actionId 返回既有结果；过期或非法请求不产生副作用。
+
+VisibleEvent { version, eventType, publicPayload, recipientPrivatePayload }
+  每个收件人的消息独立构造，禁止把全局秘密装进前端隐藏字段。</pre></details>
+    <p>技术栈及打包方式留到实施方案选择；本设计确定本地房主服务、浏览器客户端和实时双向连接的边界，不要求云服务。首版以朋友信任为前提，房主进程持有全局信息，无法对抗刻意修改程序的房主。</p>
+  </section>
+
+  <section id="recovery">
+    <h2>07 / 断线、后台与异常处理</h2>
+    <ul>
+      <li><strong>断线：</strong>座位、筹码、能力保留。当前手继续按正常时限自动过牌或弃牌，下一手起由 Bot 接管。构筑阶段断线使用正常超时随机选择规则。</li>
+      <li><strong>重连：</strong>同一浏览器保存座位凭据，连接后获取当前完整本人视图；在下一手开始时交还操作权。等待期间展示接管状态。同一凭据只允许一个有效控制连接。</li>
+      <li><strong>移动端后台：</strong>房主计时不暂停；返回后同步最新状态和必要记录，跳过过期动画，不重复播放积压音效。</li>
+      <li><strong>房主：</strong>关闭房主浏览器不停止独立运行的本地服务。电脑休眠、进程关闭或崩溃会中断比赛；服务终止后无法恢复该局，重新启动需开新局。</li>
+      <li><strong>输入异常：</strong>越权行动、非法金额、无效目标、能力次数不足或版本过期均拒绝，并返回可理解提示及新状态。重复点击不重复扣筹码或消耗能力。</li>
+      <li><strong>连接失败：</strong>显示房主地址、同网检查和重试入口；无法连接时不能假装已经入座或提交操作成功。</li>
+    </ul>
+  </section>
+
+  <section id="validation">
+    <h2>08 / 验证标准与后续内容工作</h2>
+    <div class="table-wrap"><table><thead><tr><th>验证维度</th><th>关键场景与通过标准</th></tr></thead><tbody>
+      <tr><td>德州正确性</td><td>常规摊牌、公共牌平局、多人不同金额全押、多个边池、短码全押后加注权与余筹分配。每手中筹码守恒，补发只在规定窗口发生。</td></tr>
+      <tr><td>比赛结算</td><td>完整推进 25 手；每阶段每个座位当庄一次。重复补发、负排名筹码、二人和多人并列、最终同分均按规则计算；每阶段总发放积分为 11。</td></tr>
+      <tr><td>能力与秘密</td><td>换牌无重复、旧牌不回流；非法窗口不能使用能力。侦察信息保持快照。检查实际网络消息及事件，不含其他座位能力、候选或未公开底牌。</td></tr>
+      <tr><td>Bot</td><td>1 真人 + 4 Bot 能完成比赛；Bot 能选能力并合法使用。用受限视图驱动决策，风格有差异，不要求达到竞技级水平。</td></tr>
+      <tr><td>网络与生命周期</td><td>1–5 真人组合、电脑与手机混合、断线重连、手机后台、重复请求与过期请求。状态一致，控制权只在规定边界交接。</td></tr>
+      <tr><td>视觉与音频</td><td>桌面 Chrome／Edge、Android Chrome、iPhone Safari 检查竖屏布局、触控、音频解锁、静音、前后台恢复和减少动态效果。素材能从房主本地加载。</td></tr>
+      <tr><td>真实体验</td><td>记录完整局耗时、各环节等待、能力使用率、得分分布与玩家反馈；重点观察弃牌刷资源、侦察与换牌组合、阶段末全押是否成为单一优势打法。</td></tr>
+    </tbody></table></div>
+    <p>当前验证状态：仅完成设计文档自检；未实现游戏，未运行游戏测试，未验证实际局时或音乐品质。</p>
+    <h3>已确定与仍需实测的界线</h3>
+    <p>固定桌人数、5 × 5 流程、阶段排名积分、补发扣除、隐藏构筑、局域网房主和霓虹视听方向为本次已确认决策。筹码与盲注数值、20 秒行动、30 秒选择及能力强度是明确的首轮试验参数，调整时需保持计分和公开信息规则一致。</p>
+    <h3>开放问题与后续产物</h3>
+    <ol>
+      <li><strong>完整能力目录：</strong>在实现完整肉鸽流程前，设计至少 7 个独立能力及其组合规则；本文件的 3 个例子不能冒充完整内容。若实际可选组合不足，再扩大能力池。</li>
+      <li><strong>素材清单：</strong>确定卡牌、牌桌、图标、BGM 和音效的具体资源、分发授权及音量基准，结合设备试听确认品质。</li>
+      <li><strong>实施方案：</strong>选择具体前后端工具、规则库与房主启动包，保持规则、传输、Bot 和呈现独立。此项不改变已确认玩法，不由本文擅自开始实现。</li>
+      <li><strong>试玩调优：</strong>先验证完整一局，再依据真实耗时和打法分布修改参数；不把 30–45 分钟或平衡性写成已经验证的结果。</li>
+    </ol>
+    <p class="note">文档范围是可审阅的产品与系统设计。完整能力内容、最终素材和具体实施技术仍有独立工作，本文明确记录这些边界，避免后续直接把示例当成全部需求。</p>
+  </section>
+  <footer>自包含静态 HTML · 无外部依赖、脚本或动画 · 线框仅说明布局，实际游戏采用上述动态视听方向。</footer>
+</main>
+</body>
+</html>
