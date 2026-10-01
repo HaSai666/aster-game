@@ -283,9 +283,9 @@
     },
 
     WIN_TIERS: [
-      { id: "legend", label: "神 话 降 临", threshold: 100, hold: 6200, fx: 4 },
-      { id: "super", label: "超 级 巨 奖", threshold: 50, hold: 5000, fx: 4 },
-      { id: "mega", label: "巨 奖", threshold: 25, hold: 4000, fx: 3 },
+      { id: "legend", label: "神 话 降 临", threshold: 100, hold: 6200, fx: 4, cg: true },
+      { id: "super", label: "超 级 巨 奖", threshold: 50, hold: 5000, fx: 4, cg: true },
+      { id: "mega", label: "巨 奖", threshold: 25, hold: 4000, fx: 3, cg: true },
       { id: "big", label: "大 奖", threshold: 10, hold: 3000, fx: 3 },
       { id: "nice", label: "不 错", threshold: 3, hold: 1700, fx: 2 },
       { id: "small", label: "小 赢", threshold: 1, hold: 1100, fx: 1 },
@@ -399,10 +399,10 @@
 
     /* 娱乐模式的赢钱量级完全不同，奖级阈值整体抬高 */
     WIN_TIERS: [
-      { id: "legend", label: "富 可 敌 国", threshold: 2000, hold: 6800, fx: 4 },
-      { id: "super", label: "超 级 巨 奖", threshold: 800, hold: 5600, fx: 4 },
-      { id: "mega", label: "巨 奖", threshold: 300, hold: 4400, fx: 4 },
-      { id: "big", label: "大 奖", threshold: 100, hold: 3200, fx: 3 },
+      { id: "legend", label: "富 可 敌 国", threshold: 2000, hold: 6800, fx: 4, cg: true },
+      { id: "super", label: "超 级 巨 奖", threshold: 800, hold: 5600, fx: 4, cg: true },
+      { id: "mega", label: "巨 奖", threshold: 300, hold: 4400, fx: 4, cg: true },
+      { id: "big", label: "大 奖", threshold: 100, hold: 3200, fx: 3, cg: true },
       { id: "nice", label: "不 错", threshold: 30, hold: 1800, fx: 2 },
       { id: "small", label: "小 赢", threshold: 5, hold: 1100, fx: 1 },
       { id: "tiny", label: "小 赏", threshold: 0, hold: 800, fx: 1 }
@@ -474,7 +474,7 @@
     leaderboard: { size: 20 }
   };
 
-  var BUILD = "20261001";
+  var BUILD = "20261001b";
 
   var CONFIG = {
     BUILD: BUILD,

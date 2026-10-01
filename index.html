@@ -210,6 +210,20 @@
     </div>
   </div>
 
+  <!-- 大奖结算 CG：真正打断游戏，必须玩家自己按「收下」才继续 -->
+  <div class="cg" id="cg" role="dialog" aria-live="assertive" aria-modal="true">
+    <div class="cg-rays" aria-hidden="true"></div>
+    <div class="cg-frame">
+      <div class="cg-kicker" id="cg-kicker"></div>
+      <div class="cg-title" id="cg-title"></div>
+      <div class="cg-amount" id="cg-amount">$0</div>
+      <div class="cg-mult" id="cg-mult"></div>
+      <div class="cg-lines" id="cg-lines"></div>
+      <button class="cg-go" id="cg-go" data-silent="1">收 下</button>
+      <div class="cg-hint" id="cg-hint">按「收下」或空格继续</div>
+    </div>
+  </div>
+
   <!-- 每日签到 -->
   <div class="modal-backdrop" id="daily-modal" role="dialog" aria-modal="true" aria-labelledby="daily-title">
     <div class="modal">

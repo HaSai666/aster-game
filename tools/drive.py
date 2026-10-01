@@ -44,6 +44,7 @@ class Page:
     def __init__(self, ws_url):
         self.ws = websocket.create_connection(ws_url, timeout=30)
         self.id = 0
+        self.cg_seen = 0
 
     def send(self, method, **params):
         self.id += 1
@@ -75,12 +76,20 @@ class Page:
         print(f"  -> {name}.png")
         return path
 
-    def wait_for(self, expression, timeout=40, label=""):
-        """轮询一个返回 bool 的表达式。"""
+    def wait_for(self, expression, timeout=40, label="", cg=True):
+        """轮询一个返回 bool 的表达式。
+
+        大奖结算 CG 会把流程停在那里等玩家按「收下」，所以等"回到 idle"这类
+        条件时必须顺手把它按掉，否则每次撞上大奖都会假超时。
+        要专门检验 CG 不会自己消失时，传 cg=False。"""
         deadline = time.time() + timeout
         while time.time() < deadline:
             if self.js(expression):
                 return True
+            if cg and self.js("document.getElementById('cg').classList.contains('ready')"):
+                self.cg_seen += 1
+                self.js("document.getElementById('cg-go').click()")
+                time.sleep(0.5)
             time.sleep(0.12)
         raise TimeoutError(f"等待超时: {label or expression}")
 
@@ -96,6 +105,11 @@ class Page:
                     if name not in taken and self.js(expr):
                         self.shot(name)
                         taken.add(name)
+            if self.js("document.getElementById('cg').classList.contains('ready')"):
+                self.cg_seen += 1
+                self.js("document.getElementById('cg-go').click()")
+                time.sleep(0.6)
+                continue
             if not self.js(condition):
                 return presses
             if self.js("window.__jinlong.awaitingPress"):
@@ -238,6 +252,9 @@ def run(keep):
         page.js("if(Number(document.getElementById('auto-label').textContent.replace(/\\D/g,''))>0)"
                 "document.getElementById('auto-btn').click()")
         page.wait_for("window.__jinlong.phase==='idle'", timeout=40, label="自动旋转停下")
+
+        if page.cg_seen:
+            print(f"    期间弹出大奖结算 CG {page.cg_seen} 次（已逐一「收下」）")
 
         print("[4b] 擦边球（最后一轴先差一点点停住）")
         page.js("window.__teaseSeen=false;"
@@ -485,6 +502,42 @@ def run(keep):
             failures.append(f"两个厅共用了钱包（都是 {nw}）")
         else:
             print(f"    正常厅金库 {nw} / 娱乐厅金库 {pw}")
+
+        print("[15] 大奖结算 CG：必须打断自动旋转、等玩家按")
+        page.js("document.getElementById('buyin-go').click()")
+        time.sleep(0.8)
+        page.js("""
+          var e = window.__jinlong.engine;
+          window.__saved2 = e.strips.base.map(function (s) { return s.slice(); });
+          e.strips = { base: e.cfg.STRIPS.base.map(function (s) {
+            return s.map(function () { return 'PX'; }); }), free: e.cfg.STRIPS.free };
+        """)
+        page.js("document.getElementById('auto-select').value='25';"
+                "document.getElementById('auto-btn').click()")
+        page.wait_for("document.getElementById('cg').classList.contains('show')",
+                      timeout=60, label="大奖结算 CG", cg=False)
+        if page.js("document.getElementById('auto-btn').classList.contains('on')"):
+            failures.append("CG 弹出后自动旋转没有停下")
+        page.wait_for("document.getElementById('cg').classList.contains('ready')",
+                      timeout=25, label="CG 数字滚完", cg=False)
+        page.shot("25-cg")
+        info = page.js("JSON.stringify({t: document.getElementById('cg-title').textContent,"
+                       " a: document.getElementById('cg-amount').textContent,"
+                       " m: document.getElementById('cg-mult').textContent})")
+        print("    " + info)
+        # 不按的话必须一直停着 —— 这正是"一闪而过"的反面
+        time.sleep(5.0)
+        if not page.js("document.getElementById('cg').classList.contains('show')"):
+            failures.append("没人按 CG 就自己消失了")
+        if page.js("window.__jinlong.phase") == "idle":
+            failures.append("CG 还开着，游戏却已经回到 idle")
+        page.js("document.getElementById('cg-go').click()")
+        time.sleep(2.0)
+        if page.js("document.getElementById('cg').classList.contains('show')"):
+            failures.append("按了「收下」没有关掉 CG")
+        page.js("window.__jinlong.engine.strips = { base: window.__saved2,"
+                " free: window.__jinlong.engine.cfg.STRIPS.free }")
+        page.wait_for("window.__jinlong.phase==='idle'", timeout=60, label="CG 之后回到 idle")
 
         errs = page.js("window.__errs")
         if errs:

@@ -50,6 +50,7 @@
     "vip-next", "vip-rebate", "vip-fill", "vip-rebate-note", "vip-ladder", "vip-chip-name",
     "party-bar", "snow-meter", "snow-steps", "snow-now", "rampage-chip", "rampage-left",
     "build-stamp", "force-update", "hall-picker",
+    "cg", "cg-kicker", "cg-title", "cg-amount", "cg-mult", "cg-lines", "cg-go", "cg-hint",
     "paytable-modal", "paytable-body", "settings-modal",
     "opt-motion", "opt-quickwin", "reset-save",
     "log-list", "achievement-list", "achievement-count", "toast"
@@ -821,6 +822,106 @@
     });
   }
 
+  /* ==================================================================
+     大奖结算 CG
+     横幅是"演出"，几秒自动收掉，自动旋转会直接碾过去 —— 单笔赢几百万
+     一闪而过。这个是"结算"：接管整屏、**停掉自动旋转**、数字慢慢滚上去，
+     滚完才亮出「收下」，然后等玩家自己按。不按就不往下走。
+     ================================================================== */
+  var cgResolver = null;
+
+  function cgOpen() { return !!cgResolver; }
+
+  /* amount 已经是最终金额；lines 是明细（几连、几倍、第几枚钱币之类）。 */
+  async function bigWinCG(tier, amount, bet, kicker, lines) {
+    hideBanner();
+    hideFeature();
+
+    /* 这种时候继续自动旋转没有意义：玩家正要看的就是这个数字 */
+    if (autoRemaining > 0) {
+      autoRemaining = 0;
+      el.autoLabel.textContent = "自动";
+      el.autoBtn.classList.remove("on");
+    }
+    skipRequested = false;
+
+    el.cgKicker.textContent = kicker || "";
+    el.cgTitle.textContent = tier.label;
+    el.cgMult.textContent = bet > 0 ? fmt(amount / bet) + "× 下注" : "";
+    el.cgLines.innerHTML = (lines || []).filter(Boolean).join("　·　");
+    el.cgAmount.textContent = money(0);
+    el.cg.className = "cg show counting tier-" + tier.id;
+    document.body.classList.add("cg-open");
+
+    audio.setIntensity(1);
+    audio.impact(4);
+    fx.impact(4, { colors: window.ASTER_FX.FESTIVE });
+    fx.vignette(true, tier.id === "grand" || tier.id === "legend"
+      ? "rgba(255,80,40,.5)" : "rgba(232,182,64,.42)");
+
+    /* 数字滚得比平时久：这是整个 CG 的主角。大奖滚满 4.2 秒。 */
+    var dur = Math.min(4200, 1600 + tier.fx * 650);
+    if (state.reducedMotion) dur = 700;
+    fx.coinStorm(dur + 2600, 70 + tier.fx * 30);
+    await cgCountUp(amount, dur);
+
+    el.cg.classList.remove("counting");
+    el.cg.classList.add("landed");
+    audio.grand();
+    fx.shockwave({ color: "#ffe08a", width: 16, dur: 1200 });
+    fx.shake(18, 700);
+    await wait(260);
+    el.cg.classList.add("ready");
+
+    /* 等玩家按。空格也行 —— 手放在空格上连转的人最需要这一下。 */
+    await new Promise(function (resolve) {
+      cgResolver = function () {
+        cgResolver = null;
+        resolve();
+      };
+    });
+
+    audio.ui("click");
+    audio.coinShower(1100, 18);
+    fx.burst(90, { y: window.innerHeight * 0.55, speed: 480, size: 9 });
+    el.cg.className = "cg";
+    document.body.classList.remove("cg-open");
+    if (engine.mode !== "free" && phase !== "hold") {
+      fx.vignette(false);
+      audio.setIntensity(0);
+    }
+    await wait(180);
+  }
+
+  function cgCountUp(target, duration) {
+    if (state.reducedMotion || duration < 120) {
+      el.cgAmount.textContent = money(target);
+      return wait(duration);
+    }
+    return new Promise(function (resolve) {
+      var start = performance.now();
+      var lastTick = 0;
+      function step(now) {
+        var t = Math.min(1, (now - start) / duration);
+        /* 先快后慢：前半段数字飞起来，最后一秒一格一格往上爬 */
+        var eased = 1 - Math.pow(1 - t, 2.6);
+        el.cgAmount.textContent = money(target * eased);
+        if (now - lastTick > 58) { lastTick = now; audio.countTick(t); }
+        if (t < 1) requestAnimationFrame(step);
+        else { el.cgAmount.textContent = money(target); resolve(); }
+      }
+      requestAnimationFrame(step);
+    });
+  }
+
+  function cgDismiss() {
+    if (!cgResolver) return false;
+    if (!el.cg.classList.contains("ready")) return false;   // 还在滚数字，按了不算
+    pressFeedback(el.cgGo);
+    cgResolver();
+    return true;
+  }
+
   /* ---------------- 横幅 / 满屏特写 ---------------- */
   function showBanner(tier, amount, sub) {
     hideFeature();
@@ -1156,7 +1257,6 @@
         fx.flash(0.2);
         fx.shake(5, 260);
       }
-      showBanner(tier, spinWin, lines.join("　"));
       renderer.burst(40 + tier.fx * 45, { speed: 320 + tier.fx * 120, size: 7 + tier.fx * 2 });
       renderer.shake(6 + tier.fx * 5);
       renderer.flash(0.25 + tier.fx * 0.12);
@@ -1164,9 +1264,15 @@
         fx.coinStorm(tier.hold + 1200, 40 + tier.fx * 22);
         renderer.coinRain(60);
       }
-      await countSession(session + spinWin, Math.min(tier.hold * 0.6, 2600));
-      await wait(tier.hold * 0.4);
-      hideBanner();
+      if (tier.cg) {
+        await bigWinCG(tier, spinWin, bet, "本次旋转", lines);
+        await countSession(session + spinWin, 420);
+      } else {
+        showBanner(tier, spinWin, lines.join("　"));
+        await countSession(session + spinWin, Math.min(tier.hold * 0.6, 2600));
+        await wait(tier.hold * 0.4);
+        hideBanner();
+      }
       if (tier.fx >= 3) logEvent(tier.label.replace(/\s/g, "") + "　<b>+" + money(spinWin) + "</b>　" + lines.join(" "), "gold");
       else logEvent("赢得 <b>+" + money(spinWin) + "</b>　" + lines.join(" "));
       el.resultLine.textContent = "+" + money(spinWin) + "　" + lines.join("　");
@@ -1195,13 +1301,13 @@
       renderer.coinRain(200);
       showFeature("累 积 彩 金", "财神降临", money(outcome.jackpot.win), "grand");
       logEvent("<b>累积彩金命中</b>　<b>+" + money(outcome.jackpot.win) + "</b>", "gold");
-      await wait(3600);
+      await wait(2200);
       hideFeature();
       var jTier = ENGINE.winTier(MODE, outcome.jackpot.win, bet);
-      showBanner(jTier, outcome.jackpot.win, "累积彩金");
-      await countSession(session + outcome.spinWin + (outcome.hold ? outcome.hold.total : 0) + outcome.jackpot.win, 2600);
-      await wait(2400);
-      hideBanner();
+      await bigWinCG({ id: "grand", label: "累 积 彩 金", fx: 4 },
+        outcome.jackpot.win, bet, "财 神 降 临",
+        ["整池带走", jTier.label.replace(/\s/g, "")]);
+      await countSession(session + outcome.spinWin + (outcome.hold ? outcome.hold.total : 0) + outcome.jackpot.win, 420);
       if (engine.mode !== "free" && phase !== "hold") fx.vignette(false);
       displayedJackpot = engine.jackpot;
     }
@@ -1409,10 +1515,18 @@
     fx.shake(22, 900);
     renderer.coinRain(120);
 
-    showBanner(tier, hold.total, "聚宝盆 · " + hold.filled + " 枚钱币" + (hold.grand ? " · 大满贯" : ""));
-    await countSession(session + outcome.spinWin + hold.total, 2600);
-    await wait(2800);                 // 让金币再崩一会儿
-    hideBanner();
+    var holdLines = [hold.filled + " 枚钱币"];
+    if (hold.multiplier > 1) holdLines.push("全盆 " + hold.multiplier + "× 加倍");
+    if (hold.grand) holdLines.push("大满贯 +" + F.holdSpin.grandPay + "× 下注");
+    if (tier.cg) {
+      await bigWinCG(tier, hold.total, outcome.bet, "聚 宝 盆 结 算", holdLines);
+      await countSession(session + outcome.spinWin + hold.total, 420);
+    } else {
+      showBanner(tier, hold.total, holdLines.join("　·　"));
+      await countSession(session + outcome.spinWin + hold.total, 2600);
+      await wait(2800);               // 让金币再崩一会儿
+      hideBanner();
+    }
     renderer.exitHold();
     document.body.classList.remove("hold-mode");
     if (engine.mode !== "free") { fx.vignette(false); audio.setIntensity(0); }
@@ -1608,6 +1722,7 @@
 
   /* 旋转键在三种语境下都是它：普通旋转、手动免费旋转、聚宝盆重转 */
   function pressSpin() {
+    if (cgOpen()) { cgDismiss(); return; }
     if (pressResolver) { pressFeedback(el.spinBtn); pressResolver(); return; }
     if (phase === "idle") { pressFeedback(el.spinBtn); spin(); }
   }
@@ -1625,6 +1740,7 @@
       });
     });
 
+    el.cgGo.addEventListener("click", cgDismiss);
     el.spinBtn.addEventListener("click", pressSpin);
     el.collectBtn.addEventListener("click", collect);
     el.betDown.addEventListener("click", function () { stepBet(-1); });
@@ -1738,12 +1854,16 @@
       if (e.code !== "Space" || e.repeat) return;
       if (document.querySelector(".modal-backdrop.show")) return;
       e.preventDefault();
+      /* 结算 CG 开着的时候，空格是"收下"，绝不是"快进" ——
+       * 走到下面那条 skipRequested 就等于把它一键跳过了，白做。 */
+      if (cgOpen()) { cgDismiss(); return; }
       if (pressResolver || phase === "idle") pressSpin();
       else skipRequested = true;
     });
 
     /* 演出过程中点画面即可快进（等待玩家按的环节除外） */
     el.stage.addEventListener("click", function () {
+      if (cgOpen()) return;
       if (!pressResolver && (phase === "presenting" || phase === "hold")) skipRequested = true;
     });
 
