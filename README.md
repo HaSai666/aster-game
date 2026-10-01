@@ -180,8 +180,17 @@
 ## 运行
 
 **网页版**：<https://hasai666.github.io/aster-game/>
-首次打开后 Service Worker 会把整个游戏缓存到本地 —— 之后秒开，断网也能玩，
-手机上还可以「添加到主屏幕」按独立应用运行（没有浏览器地址栏，画面更大也更流畅）。
+Service Worker 会把整个游戏缓存到本地 —— 断网也能玩，手机上还可以「添加到主屏幕」
+按独立应用运行（没有浏览器地址栏，画面更大也更流畅）。
+
+缓存策略分两类：**代码走 network-first**（2.5 秒超时后回落缓存），图标等静态资源走 cache-first。
+之所以代码不能 cache-first —— 那样发了新版之后玩家**第一次打开看到的还是旧版**，
+得再刷一次才生效。双厅上线时真踩到了：页面只有正常模式，因为 index.html 和 app.js 都是上一版的。
+顺带一个坑：SW 里 `fetch(req)` 仍然走浏览器自己的 HTTP 缓存，GitHub Pages 发 `max-age=600`，
+十分钟内拿到的还是旧响应 —— 必须显式 `cache: "no-cache"` 带 ETag 去问一次。
+`tools/sw_test.py` 就是专门钉这条的回归测试。
+
+设置里有版本号和「强制更新到最新版」（清掉所有缓存并注销 SW 再刷新），以防万一。
 
 **本地**：直接用浏览器打开 `index.html` 即可，没有任何依赖。也可以起个静态服务器：
 
@@ -242,6 +251,7 @@ F11 全屏、Ctrl+R 重载。页面脚本若出错会写到 exe 同级的 `jinlo
 | `tools/force.py` | 把引擎状态直接掰到稀有机制的触发点，专测演出代码（狂暴 120 转一次，等不起） |
 | `tools/runsim.py` | 在 headless Chrome 里跑 `sim.html` 并把结果打到终端 |
 | `tools/smoke.py` | 最小启动检查：开一个真渲染的页面，看有没有脚本错误，可追加任意 JS 步骤 |
+| `tools/sw_test.py` | Service Worker 回归：起本地服务器 → 装好 SW → 改文件 → **只刷一次**，断言看到的是新版；再断网刷一次，断言仍可玩 |
 | `tools/build_exe.py` | 打包 Windows 单文件 exe |
 | `tools/desktop.py` | 桌面版入口（pywebview + WebView2） |
 | `tools/verify_exe.py` | 启动 exe、按标题找到窗口、截图确认真的渲染出来了 |

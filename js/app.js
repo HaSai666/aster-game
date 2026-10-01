@@ -49,6 +49,7 @@
     "vip-modal", "vip-card", "vip-name", "vip-perk", "vip-level", "vip-turnover",
     "vip-next", "vip-rebate", "vip-fill", "vip-rebate-note", "vip-ladder", "vip-chip-name",
     "party-bar", "snow-meter", "snow-steps", "snow-now", "rampage-chip", "rampage-left",
+    "build-stamp", "force-update",
     "paytable-modal", "paytable-body", "settings-modal",
     "opt-motion", "opt-quickwin", "reset-save",
     "log-list", "achievement-list", "achievement-count", "toast"
@@ -1623,6 +1624,24 @@
     el.dailyModal.addEventListener("click", function (e) {
       if (e.target === el.dailyModal || e.target.closest("[data-close]")) closeDaily();
     });
+    /* 版本号 + 一键清缓存。Service Worker 出问题的时候，
+     * 让玩家自己按一下比教他开 DevTools 现实得多。 */
+    el.buildStamp.textContent = CONFIG.BUILD;
+    el.forceUpdate.addEventListener("click", async function () {
+      el.forceUpdate.textContent = "正在更新…";
+      try {
+        if (window.caches) {
+          var keys = await caches.keys();
+          await Promise.all(keys.map(function (k) { return caches.delete(k); }));
+        }
+        if (navigator.serviceWorker) {
+          var regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map(function (r) { return r.unregister(); }));
+        }
+      } catch (err) { /* 隐私模式下可能没有这些 API，直接硬刷也能解决大半 */ }
+      location.reload(true);
+    });
+
     el.levelChip.addEventListener("click", function () {
       el.vipModal.classList.add("show");
       renderVip();

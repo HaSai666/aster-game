@@ -474,7 +474,10 @@
     leaderboard: { size: 20 }
   };
 
+  var BUILD = "20261001";
+
   var CONFIG = {
+    BUILD: BUILD,
     REELS: REELS,
     ROWS: ROWS,
     SYMBOLS: SYMBOLS,

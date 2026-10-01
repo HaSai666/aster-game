@@ -1571,3 +1571,7 @@ body.rampage-mode::after {
 @keyframes rampage-chip-pulse {
   50% { box-shadow: 0 0 34px rgba(255, 120, 70, .9); }
 }
+
+.build-note { display: flex; align-items: baseline; gap: 4px; }
+.build-note b { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.build-note .link-btn { margin: 0; font-size: 11px; }
