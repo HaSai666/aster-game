@@ -44,12 +44,12 @@
     "jackpot-bar", "jackpot-value", "mission-list",
     "streak-row", "streak-value", "streak-best",
     "daily-modal", "daily-grid", "daily-claim", "daily-note",
-    "buyin-modal", "buyin-wallet", "topup-btn", "buyin-go", "buyin-amount", "buyin-mode", "buyin-note",
+    "buyin-modal", "buyin-wallet", "topup-btn", "buyin-go", "buyin-mode", "buyin-note",
     "mode-switch", "mode-name", "mode-tag", "board-list", "board-panel",
-    "vip-modal", "vip-card", "vip-name", "vip-perk", "vip-level", "vip-turnover",
+    "buyin-title", "vip-modal", "vip-card", "vip-name", "vip-perk", "vip-level", "vip-turnover",
     "vip-next", "vip-rebate", "vip-fill", "vip-rebate-note", "vip-ladder", "vip-chip-name",
     "party-bar", "snow-meter", "snow-steps", "snow-now", "rampage-chip", "rampage-left",
-    "build-stamp", "force-update",
+    "build-stamp", "force-update", "hall-picker",
     "paytable-modal", "paytable-body", "settings-modal",
     "opt-motion", "opt-quickwin", "reset-save",
     "log-list", "achievement-list", "achievement-count", "toast"
@@ -258,14 +258,28 @@
 
   /* 换模式必须先把本局结清：两个模式钱包、彩金池、下注档完全独立，
    * 中途带着筹码跳过去会让排行榜（固定买入才可比）失去意义。 */
+  var hallArmed = { id: null, until: 0 };
+
   function requestMode(id) {
     if (!CONFIG.MODES[id] || id === MODEID) return;
     if (phase !== "idle") { audio.ui("deny"); return; }
-    if (session > 0) { audio.ui("deny"); toast("先「收手」结算本局，再换厅"); return; }
-    applyMode(id);
-    audio.gong({ vol: 0.32, dur: 2.4 });
-    fx.flash(0.42, "radial-gradient(ellipse at center, rgba(255,230,170,.85), transparent 72%)");
-    logEvent("移步 <b>" + MODE.name + "</b>", "gold");
+    if (engine.mode === "free") { audio.ui("deny"); toast("免费游戏结束后才能换厅"); return; }
+
+    /* 还坐在桌上：先确认一次，然后替玩家收手再换 —— 换厅本身要结清本局，
+     * 光弹一句"先收手"会把人卡死在那儿（收手之后弹窗又盖住了顶栏的切换）。 */
+    if (session > 0) {
+      if (hallArmed.id !== id || hallArmed.until < Date.now()) {
+        hallArmed = { id: id, until: Date.now() + 4000 };
+        updateUI();
+        toast("再按一次：收手并移步" + CONFIG.mode(id).name);
+        setTimeout(updateUI, 4100);
+        return;
+      }
+      hallArmed = { id: null, until: 0 };
+      endRun("collect", id);
+      return;
+    }
+    switchHall(id);
     openBuyin();
   }
 
@@ -767,7 +781,8 @@
 
     el.modeSwitch.querySelectorAll("button").forEach(function (b) {
       b.classList.toggle("on", b.dataset.mode === MODEID);
-      b.disabled = phase !== "idle";
+      b.classList.toggle("armed", hallArmed.id === b.dataset.mode && hallArmed.until > Date.now());
+      b.disabled = phase !== "idle" || engine.mode === "free";
     });
     el.boardPanel.style.display = MODEID === "normal" ? "" : "none";
     updatePartyHud();
@@ -1480,16 +1495,38 @@
 
   /* ---------------- 买入 / 收手 ---------------- */
   function openBuyin() {
+    renderHallPicker();
     var amount = MODE.ECONOMY.fixedBuyin;
-    el.buyinAmount.textContent = money(amount);
-    el.buyinMode.textContent = MODE.name;
     el.buyinNote.textContent = MODEID === "normal"
-      ? "每一局都是固定 " + money(amount) + "，这样最高纪录才可比。"
-      : "固定 " + money(amount) + " 入场，炸完再来。";
+      ? "固定带入，收手或输光时结算成一条纪录 —— 带入一样多，纪录才可比。"
+      : "固定带入，炸完再来。这个厅不计纪录，随便玩。";
     el.buyinGo.disabled = MS.wallet < amount;
-    el.buyinGo.textContent = MS.wallet < amount ? "金库不足" : "入座（" + money(amount) + "）";
+    el.buyinGo.textContent = MS.wallet < amount
+      ? "金库不足（需要 " + money(amount) + "）"
+      : "入座（" + money(amount) + "）";
     updateUI();
     el.buyinModal.classList.add("show");
+  }
+
+  /* 入座页的选厅卡片。弹窗是全屏遮罩，顶栏那个切换在这里点不到，
+   * 所以选厅必须在弹窗里也有一份 —— 否则收手之后就永远回不到娱乐厅。 */
+  function renderHallPicker() {
+    el.hallPicker.querySelectorAll("button").forEach(function (btn) {
+      var id = btn.dataset.mode;
+      var cfg = CONFIG.mode(id);
+      var amount = cfg.ECONOMY.fixedBuyin;
+      btn.classList.toggle("on", id === MODEID);
+      btn.querySelector(".hall-amount").textContent = money(amount);
+      btn.classList.toggle("poor", state.modes[id].wallet < amount);
+    });
+  }
+
+  /* 真正换厅：两个厅的钱包 / 彩金池 / 下注档完全独立，本局必须已经结清 */
+  function switchHall(id) {
+    applyMode(id);
+    audio.gong({ vol: 0.3, dur: 2.2 });
+    fx.flash(0.38, "radial-gradient(ellipse at center, rgba(255,230,170,.8), transparent 72%)");
+    logEvent("移步 <b>" + MODE.name + "</b>", "gold");
   }
   function buyIn(amount) {
     if (MS.wallet < amount) { audio.ui("deny"); toast("金库余额不足"); return; }
@@ -1518,7 +1555,7 @@
   function minBet() { return MODE.ECONOMY.bets[0]; }
 
   /* 一局结束（收手 / 输光）：钱回金库，正常模式结算排行榜。 */
-  async function endRun(reason) {
+  async function endRun(reason, nextMode) {
     var amount = Math.max(0, Math.round(session));
     var buyin = run ? run.buyin : MODE.ECONOMY.fixedBuyin;
     MS.wallet += amount;
@@ -1557,6 +1594,7 @@
     } else {
       toast("筹码用尽，再来一局");
     }
+    if (nextMode && nextMode !== MODEID) switchHall(nextMode);
     openBuyin();
   }
 
@@ -1657,6 +1695,13 @@
     });
 
     el.buyinGo.addEventListener("click", function () { buyIn(MODE.ECONOMY.fixedBuyin); });
+    el.hallPicker.querySelectorAll("button").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        if (btn.dataset.mode === MODEID) return;
+        switchHall(btn.dataset.mode);
+        openBuyin();
+      });
+    });
     el.modeSwitch.querySelectorAll("button").forEach(function (btn) {
       btn.addEventListener("click", function () { requestMode(btn.dataset.mode); });
     });

@@ -1575,3 +1575,109 @@ body.rampage-mode::after {
 .build-note { display: flex; align-items: baseline; gap: 4px; }
 .build-note b { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .build-note .link-btn { margin: 0; font-size: 11px; }
+
+/* ---- 入座页选厅 ---- */
+.hall-picker {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 14px 0 12px;
+}
+.hall-picker button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 12px 13px 11px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  text-align: left;
+  color: var(--text-dim);
+  background: rgba(0, 0, 0, .3);
+  cursor: pointer;
+  transition: border-color .22s, background .22s, box-shadow .22s, transform .18s;
+}
+.hall-picker button:hover { border-color: var(--line-strong); transform: translateY(-2px); }
+.hall-picker button b { font: 700 16px/1.2 var(--font-display); letter-spacing: .06em; color: var(--text); }
+.hall-picker button small { font-size: 11px; line-height: 1.4; color: var(--muted); }
+.hall-picker button em {
+  font-style: normal; font-size: 10px; letter-spacing: .1em;
+  color: var(--muted); opacity: .8;
+}
+.hall-amount {
+  margin-top: 7px;
+  font: 800 20px/1 var(--font-display);
+  color: var(--gold-hi);
+}
+.hall-picker button.on {
+  border-color: var(--gold);
+  background: linear-gradient(170deg, rgba(232, 182, 64, .16), rgba(0, 0, 0, .34));
+  box-shadow: 0 0 24px rgba(232, 182, 64, .25), inset 0 1px 0 rgba(255, 255, 255, .08);
+}
+.hall-picker button.on b { color: var(--gold-hi); }
+/* 第二张卡是娱乐厅：选中时换成霓虹粉，和厅内配色对上 */
+.hall-picker button[data-mode="party"].on {
+  border-color: #ff5f9e;
+  background: linear-gradient(170deg, rgba(255, 95, 158, .18), rgba(0, 0, 0, .34));
+  box-shadow: 0 0 26px rgba(255, 95, 158, .3), inset 0 1px 0 rgba(255, 255, 255, .08);
+}
+.hall-picker button[data-mode="party"].on b,
+.hall-picker button[data-mode="party"].on .hall-amount { color: #ffd9f2; }
+.hall-picker button.poor { opacity: .55; }
+.hall-picker button.poor .hall-amount { color: var(--muted); text-decoration: line-through; }
+
+/* 顶栏换厅的二次确认 */
+.mode-switch button.armed {
+  color: #2d0404;
+  background: linear-gradient(180deg, #ff9a6a, #e8553c);
+  box-shadow: 0 0 18px rgba(255, 110, 70, .7);
+  animation: hall-armed 1s ease-in-out infinite;
+}
+@keyframes hall-armed { 50% { box-shadow: 0 0 28px rgba(255, 140, 90, .95); } }
+
+/* ==================================================================
+   手机端顶栏：必须塞得下，否则整页被"缩放以适应"
+   ------------------------------------------------------------------
+   顶栏一旦横向溢出，移动端 Chrome 会把布局视口撑宽到内容宽度
+   （实测 375px 的机器被撑到 460px），于是整页等比缩小、顶上那一排
+   怎么也看不全。加了换厅按钮之后就触发了这个，所以这里按
+   780 / 560 / 400 三档逐级做减法，目标是 360px 也不溢出。
+   ================================================================== */
+@media (max-width: 780px) {
+  .topbar { gap: 6px; }
+  .brand { gap: 8px; min-width: 0; }
+  .brand-text { min-width: 0; }
+  .brand-text b { overflow: hidden; text-overflow: ellipsis; }
+  .topbar-right { gap: 6px; }
+  .icon-btn { width: 34px; height: 34px; }
+  .mode-switch { margin-left: 4px; padding: 2px; flex: none; }
+  .mode-switch button { padding: 5px 11px; font-size: 11px; letter-spacing: .06em; }
+}
+
+@media (max-width: 560px) {
+  /* 「243 WAYS · 虚拟金币」这行副标题先走，它只是装饰 */
+  .brand-text small { display: none; }
+  .level-track { display: none; }
+  .level-chip { padding: 4px 9px; }
+  .icon-btn { width: 32px; height: 32px; }
+  .mode-switch button { padding: 5px 9px; }
+}
+
+@media (max-width: 400px) {
+  /* 到这一档只留印章：「金龙聚宝」四个字换厅按钮更重要 */
+  .brand-text { display: none; }
+  .brand-seal { width: 34px; height: 34px; font-size: 19px; }
+  .shell { padding: 10px 10px 14px; }
+  .topbar-right { gap: 4px; }
+  .icon-btn { width: 30px; height: 30px; }
+  .mode-switch { margin-left: 0; }
+  .mode-switch button { padding: 5px 8px; font-size: 10px; letter-spacing: 0; }
+  .level-chip { padding: 4px 7px; }
+  .level-num b { font-size: 11px; }
+  .hall-picker { grid-template-columns: 1fr; gap: 8px; }
+  .hall-picker button { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+  .hall-picker button small { flex: 1 1 100%; }
+  .hall-amount { margin-top: 0; margin-left: auto; font-size: 18px; }
+  .party-bar { gap: 8px; }
+  .snow-label { display: none; }
+}

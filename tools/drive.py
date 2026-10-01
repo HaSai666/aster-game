@@ -340,6 +340,23 @@ def run(keep):
             failures.append("中途关掉签到不该弹出买入弹窗")
 
         print("[9] 买龙门（两段确认）")
+        # 买龙门要 50 倍下注；前面随机打了几十转，本局余额可能不够了。
+        # 这里不是在测余额，先把条件凑齐再测两段确认本身。
+        state = page.js("JSON.stringify({sess: window.__jinlong.session,"
+                        " price: window.__jinlong.state.modes.normal.bet * "
+                        "window.__jinlong.engine.F.buyFeature.price,"
+                        " modal: document.getElementById('buyin-modal').classList.contains('show')})")
+        print("    " + state)
+        if json.loads(state)["modal"]:
+            page.js("document.getElementById('buyin-go').click()")
+            time.sleep(0.8)
+        if page.js("window.__jinlong.session < window.__jinlong.state.modes.normal.bet"
+                   " * window.__jinlong.engine.F.buyFeature.price"):
+            page.js("document.getElementById('bet-down').click();"
+                    "document.getElementById('bet-down').click();"
+                    "document.getElementById('bet-down').click();"
+                    "document.getElementById('bet-down').click();")
+            time.sleep(0.4)
         page.js("document.getElementById('buy-btn').click()")    # 第一段：只武装
         time.sleep(0.4)
         if not page.js("document.getElementById('buy-btn').classList.contains('armed')"):
@@ -409,17 +426,51 @@ def run(keep):
             failures.append("排行榜没有渲染出来")
         page.shot("22-board")
 
-        print("[13] 切到娱乐模式")
+        print("[13] 入座页选厅（弹窗盖住顶栏，这里必须也能选）")
+        if not page.js("document.getElementById('buyin-modal').classList.contains('show')"):
+            failures.append("收手之后没有回到入座页")
+        if page.js("document.querySelectorAll('#hall-picker button').length") != 2:
+            failures.append("入座页没有渲染出两个厅")
+        page.shot("24-hall-picker")
+        page.js("document.querySelector('#hall-picker button[data-mode=\"party\"]').click()")
+        time.sleep(0.6)
+        if page.js("window.__jinlong.modeId") != "party":
+            failures.append("入座页选不了娱乐厅")
+        if page.js("document.querySelector('#hall-picker button.on').dataset.mode") != "party":
+            failures.append("入座页的选中态没有跟着变")
+        if "100,000" not in (page.js("document.getElementById('buyin-go').textContent") or ""):
+            failures.append("换厅后入座金额没有跟着变")
+        # 换回正常厅，下一步测"坐着的时候换厅"
+        page.js("document.querySelector('#hall-picker button[data-mode=\"normal\"]').click()")
+        time.sleep(0.5)
+        page.js("document.getElementById('buyin-go').click()")
+        time.sleep(0.8)
+
+        print("[13b] 坐着的时候换厅：两段确认 + 自动收手")
+        page.js("document.getElementById('spin-btn').click()")
+        page.wait_for("window.__jinlong.phase==='idle'", timeout=45, label="转一把")
         page.js("document.querySelector('#mode-switch button[data-mode=\"party\"]').click()")
         time.sleep(0.5)
+        if not page.js("document.querySelector('#mode-switch button[data-mode=\"party\"]')"
+                       ".classList.contains('armed')"):
+            failures.append("顶栏换厅的二次确认没有生效")
+        if page.js("window.__jinlong.modeId") != "normal":
+            failures.append("第一下就换厅了，二次确认形同虚设")
+        board_before = page.js("window.__jinlong.state.leaderboard.length")
+        page.js("document.querySelector('#mode-switch button[data-mode=\"party\"]').click()")
+        time.sleep(4.5)
         if page.js("window.__jinlong.modeId") != "party":
-            failures.append("切不到娱乐模式")
+            failures.append("二次确认之后没有换到娱乐厅")
+        if page.js("window.__jinlong.session") != 0:
+            failures.append("换厅没有把本局结清")
+        if page.js("window.__jinlong.state.leaderboard.length") <= board_before:
+            failures.append("换厅时的收手没有写进排行榜")
+        page.js("document.getElementById('buyin-go').click()")
+        time.sleep(0.8)
         if not page.js("document.body.classList.contains('party-mode')"):
             failures.append("娱乐模式没有换皮")
         if page.js("document.getElementById('board-panel').style.display") != "none":
             failures.append("娱乐模式不该显示排行榜")
-        page.js("document.getElementById('buyin-go').click()")
-        time.sleep(0.6)
         if not page.js("document.getElementById('party-bar').classList.contains('on')"):
             failures.append("娱乐模式的滚雪球 HUD 没有出现")
         page.js("document.getElementById('spin-btn').click()")
