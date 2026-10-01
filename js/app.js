@@ -8,8 +8,11 @@
 
   var CONFIG = window.ASTER_CONFIG;
   var ENGINE = window.ASTER_ENGINE;
-  var F = CONFIG.FEATURES;
-  var SAVE_KEY = "jinlong-slot-v1";
+  /* 当前模式的那份数值。切模式时整体换掉，所以这里用 var 不用 const。 */
+  var MODEID = CONFIG.DEFAULT_MODE;
+  var MODE = CONFIG.mode(MODEID);
+  var F = MODE.FEATURES;
+  var SAVE_KEY = "jinlong-slot-v2";
 
   var ACHIEVEMENTS = [
     { id: "first", icon: "初", title: "初鸣", desc: "完成第一次旋转" },
@@ -19,7 +22,9 @@
     { id: "twin", icon: "双", title: "双龙戏珠", desc: "两条神龙同时现身" },
     { id: "triple", icon: "三", title: "三龙聚顶", desc: "三条神龙同时现身" },
     { id: "grand", icon: "满", title: "大满贯", desc: "聚宝盆填满十五格" },
-    { id: "hundred", icon: "百", title: "一本万利", desc: "单次旋转赢得 100 倍下注" }
+    { id: "hundred", icon: "百", title: "一本万利", desc: "单次旋转赢得 100 倍下注" },
+    { id: "record", icon: "榜", title: "榜上有名", desc: "拿下本地排行榜第一" },
+    { id: "vip", icon: "贵", title: "贵宾入室", desc: "晋升到银卡贵宾" }
   ];
 
   var $ = function (id) { return document.getElementById(id); };
@@ -39,7 +44,11 @@
     "jackpot-bar", "jackpot-value", "mission-list",
     "streak-row", "streak-value", "streak-best",
     "daily-modal", "daily-grid", "daily-claim", "daily-note",
-    "buyin-modal", "buyin-options", "buyin-wallet", "topup-btn",
+    "buyin-modal", "buyin-wallet", "topup-btn", "buyin-go", "buyin-amount", "buyin-mode", "buyin-note",
+    "mode-switch", "mode-name", "mode-tag", "board-list", "board-panel",
+    "vip-modal", "vip-card", "vip-name", "vip-perk", "vip-level", "vip-turnover",
+    "vip-next", "vip-rebate", "vip-fill", "vip-rebate-note", "vip-ladder", "vip-chip-name",
+    "party-bar", "snow-meter", "snow-steps", "snow-now", "rampage-chip", "rampage-left",
     "paytable-modal", "paytable-body", "settings-modal",
     "opt-motion", "opt-quickwin", "reset-save",
     "log-list", "achievement-list", "achievement-count", "toast"
@@ -47,31 +56,44 @@
 
   var META = CONFIG.META;
 
+  /* 两个模式各自一份钱包与进度；等级、任务、签到、成就是账号级的，共享。 */
+  function freshModeState(modeId) {
+    var eco = CONFIG.mode(modeId).ECONOMY;
+    return {
+      wallet: eco.startingWallet,
+      bet: eco.defaultBet,
+      charge: 0,
+      spinCount: 0,
+      bestWin: 0,
+      jackpotPot: null,
+      jackpotReserve: 0
+    };
+  }
+
   var defaults = {
-    wallet: CONFIG.ECONOMY.startingWallet,
-    bet: CONFIG.ECONOMY.defaultBet,
-    charge: 0,
-    spinCount: 0,
-    bestWin: 0,
+    mode: CONFIG.DEFAULT_MODE,
+    modes: { normal: freshModeState("normal"), party: freshModeState("party") },
     achievements: {},
     soundOn: true,
     musicOn: true,
     turbo: false,
     reducedMotion: false,
     quickWin: false,
-    /* 局外成长 */
+    /* 局外成长（共享） */
     level: 1,
     xp: 0,
+    totalWager: 0,        // 累计流水，用来算洗码返水
+    rebateBase: 0,        // 上次结算返水时的流水
     missions: null,
     missionsDone: 0,
     lastDaily: "",
     dailyStreak: 0,
     bestStreak: 0,
-    jackpotPot: null,
-    jackpotReserve: 0
+    leaderboard: []       // 只记正常模式
   };
 
   var state = load();
+  var MS = null;                 // 当前模式的进度（钱包/下注/龙气/彩金池）
   var session = 0;
   var phase = "idle";            // idle | spinning | presenting | hold
   var autoRemaining = 0;
@@ -91,37 +113,24 @@
 
   /* ---------------- 存档 ---------------- */
   function load() {
-    try {
-      var raw = JSON.parse(localStorage.getItem(SAVE_KEY) || "null");
-      return Object.assign({}, defaults, raw || {});
-    } catch (err) {
-      return Object.assign({}, defaults);
-    }
+    var raw = null;
+    try { raw = JSON.parse(localStorage.getItem(SAVE_KEY) || "null"); } catch (err) { raw = null; }
+    var out = Object.assign({}, defaults, raw || {});
+    out.modes = Object.assign({}, defaults.modes, out.modes || {});
+    ["normal", "party"].forEach(function (id) {
+      out.modes[id] = Object.assign(freshModeState(id), out.modes[id] || {});
+    });
+    if (!Array.isArray(out.leaderboard)) out.leaderboard = [];
+    return out;
   }
   function save() {
     try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify({
-        wallet: Math.max(0, Math.round(state.wallet)),
-        bet: state.bet,
-        charge: engine.charge,
-        spinCount: state.spinCount,
-        bestWin: state.bestWin,
-        achievements: state.achievements,
-        soundOn: state.soundOn,
-        musicOn: state.musicOn,
-        turbo: state.turbo,
-        reducedMotion: state.reducedMotion,
-        quickWin: state.quickWin,
-        level: state.level,
-        xp: state.xp,
-        missions: state.missions,
-        missionsDone: state.missionsDone,
-        lastDaily: state.lastDaily,
-        dailyStreak: state.dailyStreak,
-        bestStreak: state.bestStreak,
-        jackpotPot: engine.jackpot,
-        jackpotReserve: engine.jackpotReserve
-      }));
+      MS.wallet = Math.max(0, Math.round(MS.wallet));
+      MS.charge = engine.charge;
+      MS.jackpotPot = engine.jackpot;
+      MS.jackpotReserve = engine.jackpotReserve;
+      state.mode = MODEID;
+      localStorage.setItem(SAVE_KEY, JSON.stringify(state));
     } catch (err) { /* 隐私模式下写不进去，不影响游戏 */ }
   }
 
@@ -211,6 +220,204 @@
     save();
   }
 
+  /* 切换模式：换数值、换钱包、换彩金池，本局清空。 */
+  function applyMode(id, opts) {
+    opts = opts || {};
+    MODEID = CONFIG.MODES[id] ? id : CONFIG.DEFAULT_MODE;
+    MODE = CONFIG.mode(MODEID);
+    F = MODE.FEATURES;
+    MS = state.modes[MODEID];
+    state.mode = MODEID;
+
+    engine.setMode(MODEID);
+    engine.charge = Math.min(F.charge.max - 1, MS.charge || 0);
+    if (typeof MS.jackpotPot === "number") engine.jackpot = MS.jackpotPot;
+    engine.jackpotReserve = MS.jackpotReserve || 0;
+    displayedJackpot = engine.jackpot;
+
+    /* 下注档位换了一整套，旧的值可能不在新列表里 */
+    if (MODE.ECONOMY.bets.indexOf(MS.bet) < 0) MS.bet = MODE.ECONOMY.defaultBet;
+
+    session = 0;
+    displayedSession = 0;
+    autoRemaining = 0;
+    streak = 0;
+    renderer.setStrips(MODE.STRIPS.base);
+    renderer.setStops([4, 17, 31, 46, 9]);
+    document.body.classList.toggle("party-mode", MODEID === "party");
+    buildSnowMeter();
+    el.modeName.textContent = MODE.name;
+    el.modeTag.textContent = MODE.tagline;
+    renderPaytable();
+    renderBoard();
+    updateStreak(false);
+    updateUI();
+    if (!opts.silent) save();
+  }
+
+  /* 换模式必须先把本局结清：两个模式钱包、彩金池、下注档完全独立，
+   * 中途带着筹码跳过去会让排行榜（固定买入才可比）失去意义。 */
+  function requestMode(id) {
+    if (!CONFIG.MODES[id] || id === MODEID) return;
+    if (phase !== "idle") { audio.ui("deny"); return; }
+    if (session > 0) { audio.ui("deny"); toast("先「收手」结算本局，再换厅"); return; }
+    applyMode(id);
+    audio.gong({ vol: 0.32, dur: 2.4 });
+    fx.flash(0.42, "radial-gradient(ellipse at center, rgba(255,230,170,.85), transparent 72%)");
+    logEvent("移步 <b>" + MODE.name + "</b>", "gold");
+    openBuyin();
+  }
+
+  /* ---- 娱乐模式 HUD：滚雪球 / 金龙狂暴 ---- */
+  function buildSnowMeter() {
+    var steps = F.snowball ? F.snowball.steps : null;
+    el.partyBar.classList.toggle("on", !!steps);
+    if (!steps) return;
+    el.snowSteps.innerHTML = steps.map(function (m) {
+      return '<i data-m="' + m + '"></i>';
+    }).join("");
+    updatePartyHud();
+  }
+
+  function updatePartyHud() {
+    if (!F.snowball) return;
+    var step = engine.snowballStep;
+    var mult = engine.snowballMult();
+    el.snowNow.textContent = mult + "×";
+    el.snowMeter.classList.toggle("hot", step >= 2);
+    var cells = el.snowSteps.children;
+    for (var i = 0; i < cells.length; i++) cells[i].className = i <= step ? "on" : "";
+    el.rampageChip.classList.toggle("on", engine.rampageLeft > 0);
+    el.rampageLeft.textContent = engine.rampageLeft;
+  }
+
+  /* ==================================================================
+     贵宾厅段位：每 8 级一段，段位决定洗码返水比例。
+     等级本身来自流水（下注额），所以这整套就是"押得多、位子好"。
+     ================================================================== */
+  function vipIndex() {
+    return Math.min(META.vip.tiers.length - 1,
+      Math.floor((state.level - 1) / META.vip.levelsPerTier));
+  }
+  function vipTier() { return META.vip.tiers[vipIndex()]; }
+
+  /* 娱乐模式筹码大一个量级，流水按 partyXpRate 折算，否则一局就封顶 */
+  function wagerWeight() { return MODEID === "party" ? META.level.partyXpRate : 1; }
+
+  /* 洗码返水：每满 rebateEvery 的流水结算一次，按当前段位比例发到金库。
+   * 比例为 0 的段位也要推进基准，否则升段后会把散客时期的流水一起补发。 */
+  function settleRebate() {
+    var every = META.vip.rebateEvery;
+    var pending = state.totalWager - state.rebateBase;
+    if (pending < every) return 0;
+    var chunks = Math.floor(pending / every);
+    state.rebateBase += chunks * every;
+    var amount = Math.round(chunks * every * vipTier().rebate);
+    if (amount <= 0) return 0;
+    MS.wallet += amount;
+    audio.coinShower(700, 12);
+    fx.burst(48, { y: 90, x: window.innerWidth - 120, speed: 320, size: 8 });
+    toast(vipTier().name + " 洗码返水　+" + money(amount));
+    logEvent("洗码返水（" + vipTier().name + "）　<b>+" + money(amount) + "</b>", "gold");
+    return amount;
+  }
+
+  function renderVip() {
+    var i = vipIndex();
+    var tier = META.vip.tiers[i];
+    var next = META.vip.tiers[i + 1];
+    var span = META.vip.levelsPerTier;
+    el.vipChipName.textContent = tier.name;
+    el.levelChip.style.setProperty("--vip", tier.card);
+    if (!el.vipModal.classList.contains("show")) return;   // 弹窗没开就不做重活
+
+    el.vipCard.style.setProperty("--vip", tier.card);
+    el.vipName.textContent = tier.name;
+    el.vipPerk.textContent = tier.perk;
+    el.vipLevel.textContent = state.level;
+    el.vipTurnover.textContent = money(state.totalWager);
+    el.vipRebate.textContent = next || tier.rebate ? "返水 " + (tier.rebate * 100).toFixed(1) + "%" : "无返水";
+    if (next) {
+      var needLevel = (i + 1) * span + 1;
+      var into = state.level - (i * span + 1);
+      el.vipNext.textContent = "距 " + next.name + " 还差 " + (needLevel - state.level) + " 级";
+      el.vipFill.style.width = Math.min(100, (into / span) * 100).toFixed(1) + "%";
+    } else {
+      el.vipNext.textContent = "已是封顶段位";
+      el.vipFill.style.width = "100%";
+    }
+    var left = META.vip.rebateEvery - (state.totalWager - state.rebateBase);
+    el.vipRebateNote.textContent = tier.rebate
+      ? "再流水 " + money(left) + " 结算一次洗码（约 " + money(META.vip.rebateEvery * tier.rebate) + "）"
+      : "升到熟客即可开始洗码返水";
+    el.vipLadder.innerHTML = META.vip.tiers.map(function (t, idx) {
+      var cls = idx === i ? "now" : idx < i ? "past" : "";
+      return '<div class="vip-rung ' + cls + '" style="--vip:' + t.card + '">' +
+        '<span class="vip-rung-dot"></span>' +
+        '<span class="vip-rung-name">' + t.name + "</span>" +
+        '<span class="vip-rung-lv">Lv.' + (idx * span + 1) + "+</span>" +
+        '<span class="vip-rung-perk">' + t.perk + "</span></div>";
+    }).join("");
+  }
+
+  /* ==================================================================
+     本地排行榜：只记正常模式。固定 $10,000 带入，按「最终带走」排名。
+     ================================================================== */
+  var run = null;
+
+  function startRun(amount) {
+    run = { buyin: amount, peak: amount, spins: 0, best: 0, at: Date.now() };
+  }
+
+  function trackRun(outcome) {
+    if (!run) return;
+    run.spins++;
+    if (session > run.peak) run.peak = session;
+    if (outcome.totalWin > run.best) run.best = outcome.totalWin;
+  }
+
+  /* 返回名次（0 起）；没进榜或不是正常模式返回 -1。 */
+  function recordRun(final) {
+    if (!run || MODEID !== "normal") { run = null; return -1; }
+    var rec = {
+      final: Math.round(final),
+      peak: Math.round(run.peak),
+      buyin: run.buyin,
+      spins: run.spins,
+      best: Math.round(run.best),
+      date: Date.now()
+    };
+    run = null;
+    if (!rec.spins) return -1;                       // 坐下没转就走，不记
+    state.leaderboard.forEach(function (r) { delete r.fresh; });
+    rec.fresh = true;
+    state.leaderboard.push(rec);
+    state.leaderboard.sort(function (a, b) { return b.final - a.final; });
+    state.leaderboard = state.leaderboard.slice(0, META.leaderboard.size);
+    var rank = state.leaderboard.indexOf(rec);
+    if (rank < 0) delete rec.fresh;
+    return rank;
+  }
+
+  function renderBoard() {
+    if (MODEID !== "normal") return;
+    var list = state.leaderboard;
+    if (!list.length) {
+      el.boardList.innerHTML = '<div class="board-empty">还没有纪录。固定 $' + fmt(MODE.ECONOMY.fixedBuyin) +
+        " 带入，收手或输光时结算。</div>";
+      return;
+    }
+    el.boardList.innerHTML = list.slice(0, 8).map(function (r, i) {
+      var d = new Date(r.date);
+      return '<div class="board-row' + (r.fresh ? " fresh" : "") + (i < 3 ? " top" : "") + '">' +
+        '<span class="board-rank">' + (i + 1) + "</span>" +
+        '<span class="board-main"><b>' + money(r.final) + "</b>" +
+        "<small>峰值 " + money(r.peak) + " · " + r.spins + " 转</small></span>" +
+        '<span class="board-date">' + (d.getMonth() + 1) + "/" + d.getDate() + "</span>" +
+        "</div>";
+    }).join("");
+  }
+
   /* ==================================================================
      局外成长：等级 / 任务 / 签到 / 彩金 / 连胜
      这些发的都是"金库"里的虚拟金币，是水龙头，不算进老虎机 RTP。
@@ -227,6 +434,7 @@
       state.xp -= xpNeeded(state.level);
       state.level++;
       gained++;
+      if (state.level >= META.vip.levelsPerTier * 2 + 1) unlock("vip");
     }
     updateLevelUI();
     return gained;
@@ -235,7 +443,7 @@
   async function celebrateLevelUp(levels) {
     var reward = 0;
     for (var i = 0; i < levels; i++) reward += META.level.reward(state.level - i);
-    state.wallet += reward;
+    MS.wallet += reward;
     var unlocked = Object.keys(META.level.betUnlock).filter(function (b) {
       var need = META.level.betUnlock[b];
       return need <= state.level && need > state.level - levels;
@@ -247,6 +455,8 @@
       "奖励 " + money(reward) + (unlocked.length ? " · 解锁下注 " + unlocked.map(function (b) { return "$" + b; }).join(" / ") : ""),
       "gold");
     logEvent("<b>升到 Lv." + state.level + "</b>　奖励 " + money(reward), "gold");
+    renderDaily();
+    renderMissions();
     el.levelChip.classList.add("bump");
     setTimeout(function () { el.levelChip.classList.remove("bump"); }, 900);
     save();
@@ -265,6 +475,7 @@
     el.levelValue.textContent = state.level;
     el.levelFill.style.width = Math.min(100, (state.xp / need) * 100).toFixed(1) + "%";
     el.levelXp.textContent = fmt(state.xp) + " / " + fmt(need);
+    renderVip();
   }
 
   /* ---- 任务 ---- */
@@ -305,14 +516,15 @@
     if (!done.length) return;
     for (var i = 0; i < done.length; i++) {
       var m = done[i];
-      state.wallet += m.coin;
+      var coin = missionCoin(m);
+      MS.wallet += coin;
       state.missionsDone++;
       var levels = addXp(m.xp);
       audio.impact(2);
       fx.burst(70, { y: window.innerHeight * 0.4, speed: 420, size: 8 });
       fx.flash(0.3);
-      toast("任务完成 · " + m.label + "　+" + money(m.coin));
-      logEvent("任务完成：" + m.label + "　<b>+" + money(m.coin) + "</b>", "gold");
+      toast("任务完成 · " + m.label + "　+" + money(coin));
+      logEvent("任务完成：" + m.label + "　<b>+" + money(coin) + "</b>", "gold");
       /* 换一个新的进来，保持永远有三条在跑 */
       var idx = state.missions.indexOf(m);
       state.missions[idx] = rollMission(state.missions.map(function (x) { return x.key; }));
@@ -324,12 +536,15 @@
     save();
   }
 
+  /* 任务奖励按贵宾段位加成 —— 段位的好处要看得见 */
+  function missionCoin(m) { return Math.round(m.coin * vipTier().mission); }
+
   function renderMissions() {
     ensureMissions();
     el.missionList.innerHTML = state.missions.map(function (m) {
       var pctDone = Math.min(100, (m.progress / m.target) * 100);
       return '<div class="mission">' +
-        '<div class="mission-top"><span>' + m.label + '</span><b>+' + money(m.coin) + "</b></div>" +
+        '<div class="mission-top"><span>' + m.label + '</span><b>+' + money(missionCoin(m)) + "</b></div>" +
         '<div class="mission-track"><i style="width:' + pctDone.toFixed(1) + '%"></i></div>' +
         '<div class="mission-foot"><span>' + fmt(Math.min(m.progress, m.target)) + " / " + fmt(m.target) + "</span><small>+" + fmt(m.xp) + " XP</small></div>" +
         "</div>";
@@ -351,9 +566,11 @@
     var next = dailyAvailable()
       ? (daysBetween(state.lastDaily, todayKey()) === 1 ? state.dailyStreak % META.daily.cycle : 0)
       : (state.dailyStreak - 1 + META.daily.cycle) % META.daily.cycle;
+    var mult = vipTier().daily;
     el.dailyGrid.innerHTML = META.daily.rewards.map(function (r, i) {
       var cls = i < next ? "done" : i === next ? "next" : "";
-      return '<div class="daily-cell ' + cls + '"><span>第 ' + (i + 1) + ' 天</span><b>' + money(r) + "</b></div>";
+      return '<div class="daily-cell ' + cls + '"><span>第 ' + (i + 1) + ' 天</span><b>' +
+        money(r * mult) + "</b></div>";
     }).join("");
     el.dailyClaim.disabled = !dailyAvailable();
     el.dailyClaim.textContent = dailyAvailable() ? "领取今日奖励" : "今天已领取";
@@ -378,8 +595,8 @@
     var gap = daysBetween(state.lastDaily, todayKey());
     state.dailyStreak = gap === 1 ? state.dailyStreak + 1 : 1;
     var index = (state.dailyStreak - 1) % META.daily.cycle;
-    var reward = META.daily.rewards[index];
-    state.wallet += reward;
+    var reward = Math.round(META.daily.rewards[index] * vipTier().daily);
+    MS.wallet += reward;
     state.lastDaily = todayKey();
     var levels = addXp(Math.round(reward * 0.1));
     save();
@@ -434,9 +651,9 @@
   }
 
   function renderPaytable() {
-    var rows = CONFIG.PAYING.slice().reverse().map(function (key) {
+    var rows = MODE.PAYING.slice().reverse().map(function (key) {
       var s = CONFIG.SYMBOLS[key];
-      var p = CONFIG.PAYS[key];
+      var p = MODE.PAYS[key];
       return '<div class="pay-row"><canvas class="pay-icon" data-symbol="' + key + '" width="56" height="56"></canvas>' +
         '<div class="pay-name"><b>' + s.name + "</b><small>3 / 4 / 5 连</small></div>" +
         '<div class="pay-values">' + p[3] + "× &nbsp; " + p[4] + "× &nbsp; " + p[5] + "×</div></div>";
@@ -500,11 +717,11 @@
   }
 
   function updateUI() {
-    el.wallet.textContent = money(state.wallet);
-    el.buyinWallet.textContent = money(state.wallet);
+    el.wallet.textContent = money(MS.wallet);
+    el.buyinWallet.textContent = money(MS.wallet);
     el.session.textContent = session > 0 ? money(displayedSession) : "—";
-    el.betValue.textContent = money(state.bet);
-    el.spinCount.textContent = fmt(state.spinCount);
+    el.betValue.textContent = money(MS.bet);
+    el.spinCount.textContent = fmt(MS.spinCount);
 
     var free = engine.mode === "free";
     el.freeHud.classList.toggle("visible", free);
@@ -542,14 +759,17 @@
     el.soundBtn.classList.toggle("off", !state.soundOn);
     el.musicBtn.classList.toggle("off", !state.musicOn);
 
-    var price = state.bet * F.buyFeature.price;
+    var price = MS.bet * F.buyFeature.price;
     el.buyPrice.textContent = money(price);
     el.buyBtn.disabled = busy || free || session < price;
     el.buyBtn.classList.toggle("armed", buyArmed > Date.now());
 
-    document.querySelectorAll("#buyin-options button").forEach(function (b) {
-      b.disabled = state.wallet < Number(b.dataset.amount);
+    el.modeSwitch.querySelectorAll("button").forEach(function (b) {
+      b.classList.toggle("on", b.dataset.mode === MODEID);
+      b.disabled = phase !== "idle";
     });
+    el.boardPanel.style.display = MODEID === "normal" ? "" : "none";
+    updatePartyHud();
     updateCharge(false);
     updateLevelUI();
   }
@@ -641,7 +861,7 @@
     var free = engine.mode === "free";
     if (!free) {
       if (session <= 0) { openBuyin(); return; }
-      if (session < state.bet) { audio.ui("deny"); toast("本局余额不足，请收手或调低下注"); return; }
+      if (session < MS.bet) { audio.ui("deny"); toast("本局余额不足，请收手或调低下注"); return; }
     }
     audio.unlock();
     skipRequested = false;
@@ -653,20 +873,22 @@
     el.resultLine.className = "result-line";
 
     if (!free) {
-      session -= state.bet;
+      session -= MS.bet;
       displayedSession = session;
-      state.spinCount++;
+      MS.spinCount++;
       unlock("first");
-      /* 经验按下注额给：押得大升得快 */
-      var levels = addXp(state.bet);
+      /* 经验 = 流水：押得大升得快。娱乐模式筹码大一档，按权重折算。 */
+      var weighted = MS.bet * wagerWeight();
+      state.totalWager += weighted;
+      var levels = addXp(weighted);
       bumpMission("spins", 1);
-      bumpMission("wager", state.bet);
+      bumpMission("wager", MS.bet);
       if (levels) { state.__pendingLevels = (state.__pendingLevels || 0) + levels; }
     }
     updateUI();
 
-    renderer.setStrips(free ? CONFIG.STRIPS.free : CONFIG.STRIPS.base);
-    var outcome = engine.play(state.bet);
+    renderer.setStrips(free ? MODE.STRIPS.free : MODE.STRIPS.base);
+    var outcome = engine.play(MS.bet);
     var tension = planTension(outcome.grid);
 
     audio.startSpinLoop();
@@ -705,7 +927,9 @@
 
     session += outcome.totalWin;
     displayedSession = session;
-    if (outcome.totalWin > state.bestWin) state.bestWin = outcome.totalWin;
+    if (outcome.totalWin > MS.bestWin) MS.bestWin = outcome.totalWin;
+    trackRun(outcome);
+    settleRebate();
 
     /* 任务与连胜结算 */
     bumpMission("won", outcome.totalWin);
@@ -732,6 +956,12 @@
 
     phase = "idle";
     updateUI();
+
+    /* 连最小注都押不起了 —— 这一局到此为止，直接结算进排行榜 */
+    if (engine.mode !== "free" && session < minBet()) {
+      await endRun("bust");
+      return;
+    }
     await chainNext(outcome);
   }
 
@@ -757,7 +987,7 @@
       autoRemaining--;
       updateUI();
       if (autoRemaining <= 0) return;
-      if (session < state.bet) {
+      if (session < MS.bet) {
         autoRemaining = 0;
         updateUI();
         toast("余额不足，自动旋转已停止");
@@ -770,6 +1000,42 @@
 
   async function present(outcome) {
     var bet = outcome.bet;
+
+    /* 0. 天降横财：钱币是结算前额外砸上去的，先让玩家看见它们落位 */
+    if (outcome.droppedCells && outcome.droppedCells.length) {
+      audio.impact(2);
+      fx.flash(0.4, "radial-gradient(ellipse at 50% -10%, rgba(255,230,160,.95), rgba(255,140,60,.3) 48%, transparent 76%)");
+      fx.coinStorm(1400, 46);
+      showFeature("天 降 横 财", outcome.droppedCells.length + " 枚招财钱币从天而降", "直接落进盘面", "gold");
+      await wait(900);
+      var rectD = el.stage.getBoundingClientRect();
+      for (var di = 0; di < outcome.droppedCells.length; di++) {
+        var idx = outcome.droppedCells[di];
+        var dcc = Math.floor(idx / CONFIG.ROWS), drr = idx % CONFIG.ROWS;
+        var dp = renderer.cellCenter(dcc, drr);
+        audio.coin(di);
+        renderer.ring(dcc, drr, "#ffd76a");
+        renderer.burst(22, { x: dp.x, y: dp.y, speed: 240, size: 7, lift: 110 });
+        fx.burst(26, { x: rectD.left + dp.x, y: rectD.top + dp.y, speed: 320, size: 8, lift: 140 });
+        fx.shake(6, 200);
+        await wait(140);
+      }
+      hideFeature();
+      logEvent("<b>天降横财</b>　+" + outcome.droppedCells.length + " 枚钱币", "gold");
+      await wait(220);
+    }
+
+    /* 0.5 金龙狂暴进行中：先亮一下身份，再走正常的神龙展开 */
+    if (outcome.rampage && outcome.rampage.active) {
+      audio.dragon();
+      fx.flash(0.5, "radial-gradient(ellipse at center, rgba(255,120,80,.9), rgba(180,20,40,.4) 50%, transparent 78%)");
+      fx.rays(2000, 0.7);
+      fx.shake(14, 420);
+      document.body.classList.add("rampage-mode");
+      await wait(260);
+    } else {
+      document.body.classList.remove("rampage-mode");
+    }
 
     /* 1. 神龙整轴展开 */
     if (outcome.wildReels.length) {
@@ -863,7 +1129,7 @@
 
     var spinWin = outcome.spinWin;
     if (spinWin > 0) {
-      var tier = ENGINE.winTier(spinWin, bet);
+      var tier = ENGINE.winTier(MODE, spinWin, bet);
       audio.win(tier.id);
       if (tier.fx >= 2) {
         audio.impact(tier.fx);
@@ -915,7 +1181,7 @@
       logEvent("<b>累积彩金命中</b>　<b>+" + money(outcome.jackpot.win) + "</b>", "gold");
       await wait(3600);
       hideFeature();
-      var jTier = ENGINE.winTier(outcome.jackpot.win, bet);
+      var jTier = ENGINE.winTier(MODE, outcome.jackpot.win, bet);
       showBanner(jTier, outcome.jackpot.win, "累积彩金");
       await countSession(session + outcome.spinWin + (outcome.hold ? outcome.hold.total : 0) + outcome.jackpot.win, 2600);
       await wait(2400);
@@ -951,6 +1217,49 @@
       document.body.classList.remove("free-mode");
     }
 
+    /* 8. 滚雪球爬级：连中越久倍率越高，断一次清零 */
+    if (F.snowball) {
+      var before = outcome.snowball.mult;
+      updatePartyHud();
+      var after = engine.snowballMult();
+      if (after > before) {
+        audio.pluck(window.ASTER_AUDIO.note(engine.snowballStep + 2, 5), { dur: 0.42, vol: 0.26 });
+        el.snowMeter.classList.remove("bump");
+        void el.snowMeter.offsetWidth;
+        el.snowMeter.classList.add("bump");
+        if (after >= 4) {
+          fx.impact(2, { color: "#7fe7ff" });
+          toast("滚雪球 " + after + "× · 别停");
+        }
+      } else if (before > 1 && after === 1) {
+        el.snowMeter.classList.remove("drop");
+        void el.snowMeter.offsetWidth;
+        el.snowMeter.classList.add("drop");
+        audio.subDrop({ vol: 0.2, dur: 0.45, from: 150, to: 50 });
+      }
+    }
+
+    /* 9. 金龙狂暴触发：下一转开始，第 2/3/4 轴全是神龙 */
+    if (outcome.rampage && outcome.rampage.triggered) {
+      audio.grand();
+      fx.impact(4, { colors: window.ASTER_FX.FESTIVE, color: "#ff5a3c" });
+      fx.rays(5200, 1);
+      fx.vignette(true, "rgba(255,70,50,.45)");
+      for (var rw = 0; rw < 4; rw++) {
+        setTimeout(function () { fx.shockwave({ color: "#ff9a4a", width: 15, dur: 1200 }); }, rw * 260);
+      }
+      fx.coinStorm(2600, 60);
+      renderer.coinRain(90);
+      showFeature("金 龙 狂 暴", "接下来 " + outcome.rampage.triggered + " 转",
+        "中间三轴全是神龙 · 再 " + F.rampage.multiplier + "× 加成", "dragon");
+      logEvent("<b>金龙狂暴</b>　接下来 " + outcome.rampage.triggered + " 转中轴全龙", "gold");
+      await wait(3000);
+      hideFeature();
+      if (engine.mode !== "free" && phase !== "hold") fx.vignette(false);
+      updatePartyHud();
+    }
+    if (outcome.rampage && outcome.rampage.left <= 0) document.body.classList.remove("rampage-mode");
+
     if (outcome.capped) toast("触及单次封顶 " + F.maxWinPerSpin + "×");
     renderer.clearHighlight();
     updateCharge(false);
@@ -979,11 +1288,12 @@
     var running = 0;
 
     for (var i = 0; i < hold.seeded.length; i++) {
-      renderer.holdLand(hold.seeded[i].index, hold.seeded[i].value);
+      var sc = hold.seeded[i];
+      renderer.holdLand(sc.index, sc.coin);
       audio.holdLock(i);
-      running += hold.seeded[i].value * outcome.bet;
+      running = holdRunning(hold, outcome.bet);
       el.holdTotal.textContent = money(running);
-      flashHoldCell(hold.seeded[i].index, 1);
+      flashHoldCell(sc.index, sc.coin);
       await wait(230);
     }
 
@@ -1011,11 +1321,12 @@
 
       if (step.landed.length) {
         for (var k = 0; k < step.landed.length; k++) {
-          renderer.holdLand(step.landed[k].index, step.landed[k].value);
+          var lc = step.landed[k];
+          renderer.holdLand(lc.index, lc.coin);
           audio.holdLock(k);
-          running += step.landed[k].value * outcome.bet;
+          running = holdRunning(hold, outcome.bet);
           el.holdTotal.textContent = money(running);
-          flashHoldCell(step.landed[k].index, step.landed[k].value);
+          flashHoldCell(lc.index, lc.coin);
           await wait(300);
         }
         audio.impact(2);
@@ -1034,7 +1345,26 @@
 
     /* ---- 结算：满屏爆炸 + 金币持续崩 ---- */
     el.holdHud.classList.remove("visible");
-    var tier = ENGINE.winTier(hold.total, outcome.bet);
+    var tier = ENGINE.winTier(MODE, hold.total, outcome.bet);
+
+    /* 倍率币 / 收集器：先把乘数单独演一遍，再报总数 —— 不然
+     * "盆里 180 枚怎么变成 2160" 这一步玩家根本看不懂。 */
+    if (hold.multiplier > 1) {
+      audio.impact(3);
+      fx.impact(3, { color: hold.collectorCount ? "#ff5a6a" : "#b47aff" });
+      fx.rays(2600, 0.8);
+      var parts = [];
+      if (hold.multCount) parts.push(hold.multCount + " 枚倍率币");
+      if (hold.collectorCount) parts.push(hold.collectorCount + " 枚聚财神");
+      showFeature("全 盆 加 倍", parts.join(" · "),
+        money(hold.coinTotal * outcome.bet) + " × " + hold.multiplier + "　→　" + money(hold.total), "grand");
+      logEvent("<b>聚宝盆加倍</b>　" + parts.join("、") + " → <b>" + hold.multiplier + "×</b>", "gold");
+      for (var mw = 0; mw < 3; mw++) {
+        setTimeout(function () { fx.shockwave({ color: "#b47aff", width: 12, dur: 1000 }); }, mw * 280);
+      }
+      await wait(2600);
+      hideFeature();
+    }
 
     if (hold.grand) {
       unlock("grand");
@@ -1078,12 +1408,23 @@
     updateUI();
   }
 
+  /* 盘面上已经锁定的钱币当前值多少（含倍率币 / 收集器的乘数） */
+  function holdRunning(hold, bet) {
+    var sum = 0, mult = 1;
+    renderer.hold.board.forEach(function (cell) {
+      if (!cell) return;
+      if (cell.t === "v") sum += cell.v;
+      else mult *= cell.v;
+    });
+    return sum * mult * bet;
+  }
+
   /* 聚宝盆落币时在屏幕坐标上也炸一下，面值越大越夸张 */
-  function flashHoldCell(index, value) {
+  function flashHoldCell(index, coin) {
     var c = Math.floor(index / CONFIG.ROWS), r = index % CONFIG.ROWS;
     var p = renderer.cellCenter(c, r);
     var rect = el.stage.getBoundingClientRect();
-    var big = value >= 5;
+    var big = coin.t !== "v" || coin.v >= 8;
     fx.burst(big ? 90 : 34, {
       x: rect.left + p.x, y: rect.top + p.y,
       speed: big ? 520 : 280, size: big ? 11 : 7, lift: 140
@@ -1098,7 +1439,7 @@
   /* ---------------- 买龙门（bonus buy）---------------- */
   async function buyFeature() {
     if (phase !== "idle" || engine.mode === "free") { audio.ui("deny"); return; }
-    var price = state.bet * F.buyFeature.price;
+    var price = MS.bet * F.buyFeature.price;
     if (session < price) { audio.ui("deny"); toast("本局余额不足以买龙门"); return; }
 
     /* 两段确认：误点一下不会直接花掉 40 倍下注 */
@@ -1138,16 +1479,25 @@
 
   /* ---------------- 买入 / 收手 ---------------- */
   function openBuyin() {
+    var amount = MODE.ECONOMY.fixedBuyin;
+    el.buyinAmount.textContent = money(amount);
+    el.buyinMode.textContent = MODE.name;
+    el.buyinNote.textContent = MODEID === "normal"
+      ? "每一局都是固定 " + money(amount) + "，这样最高纪录才可比。"
+      : "固定 " + money(amount) + " 入场，炸完再来。";
+    el.buyinGo.disabled = MS.wallet < amount;
+    el.buyinGo.textContent = MS.wallet < amount ? "金库不足" : "入座（" + money(amount) + "）";
     updateUI();
     el.buyinModal.classList.add("show");
   }
   function buyIn(amount) {
-    if (state.wallet < amount) { audio.ui("deny"); toast("金库余额不足"); return; }
+    if (MS.wallet < amount) { audio.ui("deny"); toast("金库余额不足"); return; }
     audio.unlock();
-    state.wallet -= amount;
+    MS.wallet -= amount;
     session = amount;
     displayedSession = amount;
     autoRemaining = 0;
+    startRun(amount);
     el.buyinModal.classList.remove("show");
     audio.gong({ vol: 0.34, dur: 2.6 });
     audio.coinShower(700, 14);
@@ -1161,18 +1511,51 @@
   function collect() {
     if (phase !== "idle" || session <= 0) { audio.ui("deny"); return; }
     if (engine.mode === "free") { toast("免费游戏结束后才能收手"); return; }
-    var amount = Math.round(session);
-    state.wallet += amount;
+    endRun("collect");
+  }
+
+  function minBet() { return MODE.ECONOMY.bets[0]; }
+
+  /* 一局结束（收手 / 输光）：钱回金库，正常模式结算排行榜。 */
+  async function endRun(reason) {
+    var amount = Math.max(0, Math.round(session));
+    var buyin = run ? run.buyin : MODE.ECONOMY.fixedBuyin;
+    MS.wallet += amount;
     session = 0;
     displayedSession = 0;
     autoRemaining = 0;
-    audio.bell(window.ASTER_AUDIO.note(4, 5), { dur: 0.9, vol: 0.28 });
-    audio.coinShower(900, 18);
-    fx.burst(90, { y: window.innerHeight * 0.72, speed: 420, size: 9 });
-    logEvent("收手，带走 <b>" + money(amount) + "</b>", "gold");
-    toast("已收回 " + money(amount) + " 到金库");
+    var rank = recordRun(amount);
     save();
+    renderBoard();
     updateUI();
+
+    if (reason === "collect") {
+      audio.bell(window.ASTER_AUDIO.note(4, 5), { dur: 0.9, vol: 0.28 });
+      audio.coinShower(900, 18);
+      fx.burst(90, { y: window.innerHeight * 0.72, speed: 420, size: 9 });
+      logEvent("收手，带走 <b>" + money(amount) + "</b>", "gold");
+    } else {
+      audio.ui("deny");
+      logEvent("本局筹码用尽", "warn");
+    }
+
+    if (rank === 0) {
+      unlock("record");
+      audio.impact(3);
+      audio.coinShower(2400, 30);
+      fx.impact(3, { colors: window.ASTER_FX.FESTIVE });
+      fx.coinStorm(3000, 80);
+      showFeature("新 纪 录", "带入 " + money(buyin) + " · 带走", money(amount), "gold");
+      logEvent("<b>刷新最高纪录：" + money(amount) + "</b>", "gold");
+      await wait(2600);
+      hideFeature();
+    } else if (rank > 0) {
+      toast("进入排行榜第 " + (rank + 1) + " 名 · " + money(amount));
+    } else if (reason === "collect") {
+      toast("已收回 " + money(amount) + " 到金库");
+    } else {
+      toast("筹码用尽，再来一局");
+    }
     openBuyin();
   }
 
@@ -1240,7 +1623,10 @@
     el.dailyModal.addEventListener("click", function (e) {
       if (e.target === el.dailyModal || e.target.closest("[data-close]")) closeDaily();
     });
-    el.levelChip.addEventListener("click", function () { toast("Lv." + state.level + " · 每次旋转按下注额获得经验"); });
+    el.levelChip.addEventListener("click", function () {
+      el.vipModal.classList.add("show");
+      renderVip();
+    });
     el.dailyClaim.addEventListener("click", claimDaily);
     document.querySelectorAll("[data-close]").forEach(function (btn) {
       btn.addEventListener("click", function () { $(btn.dataset.close).classList.remove("show"); });
@@ -1251,13 +1637,14 @@
       });
     });
 
-    el.buyinOptions.querySelectorAll("button").forEach(function (btn) {
-      btn.addEventListener("click", function () { buyIn(Number(btn.dataset.amount)); });
+    el.buyinGo.addEventListener("click", function () { buyIn(MODE.ECONOMY.fixedBuyin); });
+    el.modeSwitch.querySelectorAll("button").forEach(function (btn) {
+      btn.addEventListener("click", function () { requestMode(btn.dataset.mode); });
     });
     el.topupBtn.addEventListener("click", function () {
-      state.wallet += CONFIG.ECONOMY.topUp;
+      MS.wallet += MODE.ECONOMY.topUp;
       save(); updateUI();
-      toast("已补充 " + money(CONFIG.ECONOMY.topUp));
+      toast("已补充 " + money(MODE.ECONOMY.topUp));
     });
 
     el.optMotion.addEventListener("change", function () {
@@ -1324,20 +1711,20 @@
 
   function stepBet(dir) {
     var next = nextBet(dir);
-    if (next === state.bet) { audio.ui("deny"); return; }
+    if (next === MS.bet) { audio.ui("deny"); return; }
     if (betLocked(next)) {
       audio.ui("deny");
       toast("下注 $" + next + " 需要 Lv." + META.level.betUnlock[next]);
       return;
     }
-    state.bet = next;
+    MS.bet = next;
     save(); updateUI();
   }
 
   /* 下一档下注（不判断是否解锁，解锁在 stepBet / updateUI 里判） */
   function nextBet(dir) {
-    var bets = CONFIG.ECONOMY.bets;
-    var i = bets.indexOf(state.bet);
+    var bets = MODE.ECONOMY.bets;
+    var i = bets.indexOf(MS.bet);
     if (i < 0) i = 0;
     return bets[Math.min(bets.length - 1, Math.max(0, i + dir))];
   }
@@ -1355,27 +1742,15 @@
       renderer.quality = tier;
       document.body.classList.toggle("low-fx", tier === 0);
     };
-    engine.charge = Math.min(F.charge.max - 1, state.charge || 0);
-    /* 彩金池和储备跨会话延续，玩家离开时攒的钱不会白攒 */
-    if (typeof state.jackpotPot === "number") engine.jackpot = state.jackpotPot;
-    engine.jackpotReserve = state.jackpotReserve || 0;
-    displayedJackpot = engine.jackpot;
-
-    /* 开局摆一个不中奖的盘面，别一进来就像刚中了什么 */
-    renderer.setStops([4, 17, 31, 46, 9]);
-
     el.optMotion.checked = state.reducedMotion;
     el.optQuickwin.checked = state.quickWin;
     document.body.classList.toggle("reduced-motion", state.reducedMotion);
     audio.setSfx(state.soundOn);
     audio.musicOn = state.musicOn;
 
-    el.topupBtn.textContent = "领取 " + money(CONFIG.ECONOMY.topUp) + " 虚拟金币";
-    el.buyinOptions.innerHTML = CONFIG.ECONOMY.buyins.map(function (b) {
-      return '<button data-amount="' + b.amount + '"><b>' + money(b.amount) + "</b><span>" + b.title + "</span><small>" + b.note + "</small></button>";
-    }).join("");
+    /* 模式（含钱包、彩金池、轮带、赔率表）在这里一次性装配好 */
+    applyMode(state.mode || CONFIG.DEFAULT_MODE, { silent: true });
 
-    renderPaytable();
     renderAchievements();
     renderMissions();
     renderDaily();
@@ -1393,16 +1768,20 @@
       get phase() { return phase; },
       get session() { return session; },
       get awaitingPress() { return awaitingPress; },
+      get modeId() { return MODEID; },
       press: pressSpin,
       spin: spin,
-      buyIn: buyIn
+      buyIn: buyIn,
+      applyMode: applyMode
     };
 
     window.addEventListener("load", function () { renderer.resize(); fx.resize(); }, { once: true });
 
-    var dev = new URLSearchParams(location.search).get("dev");
+    var params = new URLSearchParams(location.search);
+    if (params.get("mode")) applyMode(params.get("mode"), { silent: true });
+    var dev = params.get("dev");
     if (dev) {
-      buyIn(CONFIG.ECONOMY.buyins[1].amount);
+      buyIn(MODE.ECONOMY.fixedBuyin);
       if (dev === "spin") {
         autoRemaining = 40;
         setTimeout(function () { updateUI(); spin(); }, 400);

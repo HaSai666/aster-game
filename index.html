@@ -37,10 +37,14 @@
       <div class="brand">
         <span class="brand-seal">龍</span>
         <span class="brand-text"><b>金龙聚宝</b><small>243 WAYS · 虚拟金币</small></span>
+        <div class="mode-switch" id="mode-switch" role="group" aria-label="游戏模式">
+          <button data-mode="normal" class="on">正常</button>
+          <button data-mode="party">娱乐</button>
+        </div>
       </div>
       <div class="topbar-right">
-        <button class="level-chip" id="level-chip" title="财神等级">
-          <span class="level-num">Lv.<b id="level-value">1</b></span>
+        <button class="level-chip" id="level-chip" title="贵宾厅段位">
+          <span class="level-num"><b id="vip-chip-name">散客</b><small>Lv.<i id="level-value">1</i></small></span>
           <span class="level-track"><i id="level-fill"></i></span>
           <span class="level-xp" id="level-xp">0 / 150</span>
         </button>
@@ -75,6 +79,19 @@
               <div class="charge-scales" aria-hidden="true"></div>
             </div>
             <span class="charge-state" id="charge-state">静待</span>
+          </div>
+
+          <!-- 娱乐模式专属：滚雪球倍率 + 金龙狂暴倒数 -->
+          <div class="party-bar" id="party-bar">
+            <div class="snow-meter" id="snow-meter">
+              <span class="snow-label">滚雪球</span>
+              <div class="snow-steps" id="snow-steps"></div>
+              <b class="snow-now" id="snow-now">1×</b>
+            </div>
+            <div class="rampage-chip" id="rampage-chip">
+              <span class="rampage-ico">龙</span>
+              <span>金龙狂暴 剩 <b id="rampage-left">0</b></span>
+            </div>
           </div>
 
           <div class="stage" id="stage">
@@ -155,9 +172,15 @@
         </section>
 
         <section class="panel">
-          <div class="panel-head"><h2>当前状态</h2><span class="meta">第 <b id="spin-count">0</b> 转</span></div>
+          <div class="panel-head"><h2><span id="mode-name">正常模式</span></h2><span class="meta">第 <b id="spin-count">0</b> 转</span></div>
+          <div class="mode-tag" id="mode-tag"></div>
           <div class="mode-row"><span class="mode-dot"></span><b id="mode-label">等待入座</b></div>
           <div class="streak-row" id="streak-row"><span>连胜</span><b id="streak-value">0</b><small id="streak-best">最佳 0</small></div>
+        </section>
+
+        <section class="panel" id="board-panel">
+          <div class="panel-head"><h2>最高纪录</h2><span class="meta">固定 $10,000 带入</span></div>
+          <div class="board-list" id="board-list"></div>
         </section>
 
         <section class="panel grow">
@@ -202,15 +225,41 @@
   </div>
 
   <!-- 买入 -->
-  <div class="modal-backdrop show" id="buyin-modal" role="dialog" aria-modal="true" aria-labelledby="buyin-title">
+  <div class="modal-backdrop" id="buyin-modal" role="dialog" aria-modal="true" aria-labelledby="buyin-title">
     <div class="modal buyin">
       <div class="modal-seal">財</div>
-      <p class="eyebrow">请入座</p>
-      <h1 id="buyin-title">带多少上桌</h1>
-      <p class="modal-copy">选一笔本局资金。随时可以「收手」把剩下的带回金库。</p>
-      <div class="buyin-options" id="buyin-options"></div>
+      <p class="eyebrow" id="buyin-mode">正常模式</p>
+      <h1 id="buyin-title">入 座</h1>
+      <div class="buyin-amount" id="buyin-amount">$10,000</div>
+      <p class="modal-copy" id="buyin-note"></p>
+      <button class="primary-btn" id="buyin-go">入座</button>
       <p class="wallet-hint">金库余额 <strong id="buyin-wallet">0</strong></p>
       <button class="link-btn" id="topup-btn">领取虚拟金币</button>
+    </div>
+  </div>
+
+  <!-- 贵宾厅 -->
+  <div class="modal-backdrop" id="vip-modal" role="dialog" aria-modal="true" aria-labelledby="vip-title">
+    <div class="modal vip-modal">
+      <button class="modal-close" data-close="vip-modal" data-silent="1" aria-label="关闭">×</button>
+      <p class="eyebrow">金龙国际 · 贵宾厅</p>
+      <h2 id="vip-title">贵 宾 礼 遇</h2>
+      <div class="vip-card" id="vip-card">
+        <div class="vip-card-top">
+          <span class="vip-card-brand">金龙聚宝 · VIP</span>
+          <span class="vip-card-lv">Lv.<b id="vip-level">1</b></span>
+        </div>
+        <div class="vip-card-name" id="vip-name">散客</div>
+        <div class="vip-card-perk" id="vip-perk">——</div>
+        <div class="vip-card-foot"><span>累计流水</span><b id="vip-turnover">$0</b></div>
+      </div>
+      <div class="vip-progress">
+        <div class="vip-progress-top"><span id="vip-next">距 熟客 还差 8 级</span><b id="vip-rebate">返水 0.0%</b></div>
+        <div class="vip-track"><i id="vip-fill"></i></div>
+        <div class="vip-progress-foot" id="vip-rebate-note">再流水 $20,000 结算一次洗码</div>
+      </div>
+      <div class="vip-ladder" id="vip-ladder"></div>
+      <p class="modal-note">段位按累计流水（下注额）晋升，与输赢无关；娱乐模式流水按 2% 折算。洗码返水每满 $20,000 流水结算一次，直接发到金库。全部为虚拟金币。</p>
     </div>
   </div>
 

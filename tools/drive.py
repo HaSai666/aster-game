@@ -118,7 +118,7 @@ def launch(width, height):
             f"--user-data-dir={profile}",
             f"--window-size={width},{height}",
             "--hide-scrollbars",
-            "--no-first-run",
+            "--remote-allow-origins=*", "--no-first-run",
             "--no-default-browser-check",
             "--disable-extensions",
             "--mute-audio",
@@ -178,10 +178,10 @@ def run(keep):
         print("[1] 每日签到（新的一天会先弹这个）")
         if page.js("document.getElementById('daily-modal').classList.contains('show')"):
             page.shot("01-daily")
-            before = page.js("window.__jinlong.state.wallet")
+            before = page.js("window.__jinlong.state.modes[window.__jinlong.modeId].wallet")
             page.js("document.getElementById('daily-claim').click()")
             time.sleep(2.8)
-            after = page.js("window.__jinlong.state.wallet")
+            after = page.js("window.__jinlong.state.modes[window.__jinlong.modeId].wallet")
             if after <= before:
                 failures.append(f"签到没有发钱（{before} → {after}）")
             else:
@@ -195,7 +195,7 @@ def run(keep):
         page.wait_for("document.getElementById('buyin-modal').classList.contains('show')",
                       timeout=20, label="买入弹窗")
         page.shot("02-buyin")
-        page.js("document.querySelector('#buyin-options button[data-amount=\"3000\"]').click()")
+        page.js("document.getElementById('buyin-go').click()")
         time.sleep(0.6)
         page.shot("03-table")
 
@@ -241,7 +241,7 @@ def run(keep):
 
         print("[4b] 擦边球（最后一轴先差一点点停住）")
         page.js("window.__teaseSeen=false;"
-                "window.ASTER_CONFIG.FEATURES.tease.chance = 1;")
+                "window.__jinlong.engine.F.tease.chance = 1;")
         page.js("document.getElementById('turbo-btn').click()")   # 关掉快速，看清楚
         page.js("document.getElementById('spin-btn').click()")
         deadline = time.time() + 30
@@ -256,16 +256,16 @@ def run(keep):
             failures.append("没有观察到擦边球（最后一轴的顿停）")
         else:
             print("    捕捉到擦边球顿停")
-        page.js("window.ASTER_CONFIG.FEATURES.tease.chance = 0.22")
+        page.js("window.__jinlong.engine.F.tease.chance = 0.22")
         page.wait_for("window.__jinlong.phase==='idle'", timeout=40, label="擦边球那一转结束")
 
         # 玩法触发是小概率事件，靠等运气不可靠 —— 直接把状态摆到触发点上，
         # 检查的是"表现层能不能正确演出来"，不是概率本身（概率由 sim.html 负责）。
         print("[5] 强制触发聚宝盆（每次重转都要玩家自己按）")
-        page.js("window.__jinlong.engine.charge = window.ASTER_CONFIG.FEATURES.charge.max - 1;"
-                "window.__jinlong.engine.strips = {base: window.ASTER_CONFIG.STRIPS.base.map(function(s,i){"
+        page.js("window.__jinlong.engine.charge = window.__jinlong.engine.F.charge.max - 1;"
+                "window.__jinlong.engine.strips = {base: window.__jinlong.engine.cfg.STRIPS.base.map(function(s,i){"
                 "  return i===0 ? s.map(function(){return 'C';}) : s;}),"
-                " free: window.ASTER_CONFIG.STRIPS.free};")
+                " free: window.__jinlong.engine.cfg.STRIPS.free};")
         page.js("document.getElementById('spin-btn').click()")
         page.wait_for("document.getElementById('feature-card').classList.contains('show')",
                       timeout=40, label="聚宝盆特写")
@@ -290,7 +290,7 @@ def run(keep):
 
         print("[6] 强制触发龙门免费游戏（手动逐次按）")
         page.js("""
-          var C = window.ASTER_CONFIG;
+          var C = window.__jinlong.engine.cfg;
           window.__savedStrips = C.STRIPS.base.map(function (s) { return s.slice(); });
           [0, 2, 4].forEach(function (i) {
             for (var k = 0; k < C.STRIPS.base[i].length; k++) C.STRIPS.base[i][k] = 'S';
@@ -303,7 +303,7 @@ def run(keep):
         time.sleep(0.8)
         page.shot("12-free-intro")
         page.js("""
-          var C = window.ASTER_CONFIG;
+          var C = window.__jinlong.engine.cfg;
           C.STRIPS.base.forEach(function (s, i) {
             for (var k = 0; k < s.length; k++) s[k] = window.__savedStrips[i][k];
           });
@@ -379,6 +379,61 @@ def run(keep):
         else:
             print(f"    彩金池 {jp0:.2f} → {jp1:.2f}")
         page.shot("20-meta")
+
+        print("[11] 贵宾厅段位")
+        page.js("document.getElementById('level-chip').click()")
+        time.sleep(0.6)
+        page.shot("21-vip")
+        tier = page.js("document.getElementById('vip-name').textContent")
+        if not tier:
+            failures.append("贵宾厅弹窗没有渲染段位")
+        else:
+            print(f"    当前段位 {tier} · 累计流水 "
+                  + page.js("document.getElementById('vip-turnover').textContent"))
+        if page.js("document.querySelectorAll('#vip-ladder .vip-rung').length") != 11:
+            failures.append("段位阶梯条目数不对")
+        page.js("document.querySelector('#vip-modal [data-close]').click()")
+        time.sleep(0.4)
+
+        print("[12] 收手 → 本地排行榜")
+        page.wait_for("window.__jinlong.phase==='idle'", timeout=45, label="空闲")
+        before_n = page.js("window.__jinlong.state.leaderboard.length")
+        page.js("document.getElementById('collect-btn').click()")
+        time.sleep(4.0)
+        board = page.js("JSON.stringify(window.__jinlong.state.leaderboard)")
+        if page.js("window.__jinlong.state.leaderboard.length") <= before_n:
+            failures.append("收手之后没有写进排行榜")
+        else:
+            print("    排行榜:", board[:200])
+        if page.js("document.querySelectorAll('#board-list .board-row').length") < 1:
+            failures.append("排行榜没有渲染出来")
+        page.shot("22-board")
+
+        print("[13] 切到娱乐模式")
+        page.js("document.querySelector('#mode-switch button[data-mode=\"party\"]').click()")
+        time.sleep(0.5)
+        if page.js("window.__jinlong.modeId") != "party":
+            failures.append("切不到娱乐模式")
+        if not page.js("document.body.classList.contains('party-mode')"):
+            failures.append("娱乐模式没有换皮")
+        if page.js("document.getElementById('board-panel').style.display") != "none":
+            failures.append("娱乐模式不该显示排行榜")
+        page.js("document.getElementById('buyin-go').click()")
+        time.sleep(0.6)
+        if not page.js("document.getElementById('party-bar').classList.contains('on')"):
+            failures.append("娱乐模式的滚雪球 HUD 没有出现")
+        page.js("document.getElementById('spin-btn').click()")
+        page.wait_for("window.__jinlong.phase==='idle'", timeout=60, label="娱乐模式第一转")
+        page.shot("23-party")
+        print("    娱乐模式本局 " + page.js("document.getElementById('session').textContent"))
+
+        print("[14] 两个厅的存档互不干扰")
+        pw = page.js("window.__jinlong.state.modes.party.wallet")
+        nw = page.js("window.__jinlong.state.modes.normal.wallet")
+        if pw == nw:
+            failures.append(f"两个厅共用了钱包（都是 {nw}）")
+        else:
+            print(f"    正常厅金库 {nw} / 娱乐厅金库 {pw}")
 
         errs = page.js("window.__errs")
         if errs:

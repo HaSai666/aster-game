@@ -38,7 +38,7 @@
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d", { alpha: true });
     this.dpr = 1;
-    this.strips = CONFIG.STRIPS.base;
+    this.strips = CONFIG.mode(CONFIG.DEFAULT_MODE).STRIPS.base;
     this.reels = [];
     for (var c = 0; c < REELS; c++) {
       this.reels.push({ pos: c * 7, prevPos: c * 7, speed: 0, anim: null, bounce: null, flash: 0, teasing: false });
@@ -457,9 +457,9 @@
     });
   };
 
-  Renderer.prototype.holdLand = function (index, value) {
+  Renderer.prototype.holdLand = function (index, coin) {
     if (!this.hold) return;
-    this.hold.board[index] = value;
+    this.hold.board[index] = coin;
     this.hold.pop[index] = 1;
     var L = this.layout;
     var c = Math.floor(index / ROWS), r = index % ROWS;
@@ -838,16 +838,24 @@
     }
   };
 
-  Renderer.prototype._drawLockedCoin = function (ctx, c, r, value, pop, now) {
+  /* 锁定格。coin 形如 { t, v }：
+   *   "v" 面值币（金底）  "m" 倍率币（紫底）  "c" 收集器（红底） */
+  Renderer.prototype._drawLockedCoin = function (ctx, c, r, coin, pop, now) {
     var rect = this._cellRect(c, r);
-    var big = value >= 10;
+    var type = coin.t || "v";
+    var value = coin.v;
+    var special = type !== "v";
+    var big = special || value >= 10;
     var scale = 1 + pop * 0.24;
 
     ctx.save();
-    /* 锁定格的底板自己画，好让金色更亮；大面值换成更烫的红金底 */
     ART.roundRect(ctx, rect.x, rect.y, rect.w, rect.h, rect.w * 0.13);
     var g = ctx.createLinearGradient(0, rect.y, 0, rect.y + rect.h);
-    if (big) {
+    if (type === "m") {
+      g.addColorStop(0, "#6a2a8e"); g.addColorStop(0.5, "#431a5c"); g.addColorStop(1, "#250d33");
+    } else if (type === "c") {
+      g.addColorStop(0, "#9e2a1a"); g.addColorStop(0.5, "#661509"); g.addColorStop(1, "#380a04");
+    } else if (big) {
       g.addColorStop(0, "#8e2a12"); g.addColorStop(0.5, "#5e1a0b"); g.addColorStop(1, "#330d05");
     } else {
       g.addColorStop(0, "#6b4a0c"); g.addColorStop(0.55, "#472e05"); g.addColorStop(1, "#2a1b03");
@@ -855,9 +863,11 @@
     ctx.fillStyle = g;
     ctx.fill();
     ctx.lineWidth = big ? 3 : 2;
-    ctx.strokeStyle = big ? "#fff0b8" : "rgba(255,214,110,.9)";
+    ctx.strokeStyle = type === "m" ? "#e6b8ff" : type === "c" ? "#ffb08a" : big ? "#fff0b8" : "rgba(255,214,110,.9)";
     if (this.quality > 0) {
-      ctx.shadowColor = big ? "rgba(255,150,60,.95)" : "rgba(255,200,80,.7)";
+      ctx.shadowColor = type === "m" ? "rgba(200,120,255,.95)"
+                      : type === "c" ? "rgba(255,110,60,.95)"
+                      : big ? "rgba(255,150,60,.95)" : "rgba(255,200,80,.7)";
       ctx.shadowBlur = rect.w * (big ? 0.34 : 0.2) * (1 + (big ? Math.sin(now / 220) * 0.3 : 0));
     }
     ctx.stroke();
@@ -865,17 +875,18 @@
 
     ctx.translate(rect.x + rect.w / 2, rect.y + rect.h / 2);
     ctx.scale(scale, scale);
-    /* 用无底板、无小字的图标，免得"招财"两个字和面值叠在一起 */
     var icon = this.iconAtlas && this.iconAtlas.C;
     if (icon) ctx.drawImage(icon, -rect.w / 2, -rect.h * 0.60, rect.w, rect.h);
-    ctx.font = "800 " + Math.round(rect.h * (big ? 0.27 : 0.24)) + "px system-ui,'Microsoft YaHei',sans-serif";
+
+    var text = type === "m" ? "×" + value : type === "c" ? "收 ×" + value : value + "×";
+    ctx.font = "800 " + Math.round(rect.h * (big ? 0.26 : 0.24)) + "px system-ui,'Microsoft YaHei',sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.lineWidth = Math.max(3, rect.h * 0.055);
     ctx.strokeStyle = "rgba(30,4,6,.95)";
-    ctx.strokeText(value + "×", 0, rect.h * 0.33);
-    ctx.fillStyle = big ? "#fff6d0" : "#ffe9a8";
-    ctx.fillText(value + "×", 0, rect.h * 0.33);
+    ctx.strokeText(text, 0, rect.h * 0.33);
+    ctx.fillStyle = type === "m" ? "#f0d6ff" : type === "c" ? "#ffd9c0" : big ? "#fff6d0" : "#ffe9a8";
+    ctx.fillText(text, 0, rect.h * 0.33);
     ctx.restore();
   };
 

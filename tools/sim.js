@@ -25,9 +25,10 @@
   function pct(x) { return (x * 100).toFixed(2) + "%"; }
   function num(x, d) { return Number(x).toFixed(d === undefined ? 2 : d); }
 
-  function run(spins, seed) {
-    var bet = 10;
-    var engine = new ENGINE.SlotEngine({ rng: seededRng(seed) });
+  function run(spins, seed, modeId, betOverride) {
+    var cfg = CONFIG.mode(modeId);
+    var bet = betOverride || cfg.ECONOMY.defaultBet;
+    var engine = new ENGINE.SlotEngine({ rng: seededRng(seed), mode: modeId });
     var totalBet = 0, totalWin = 0;
     var baseSpins = 0, freeSpinsPlayed = 0;
     var paidRounds = 0, rounds = 0;
@@ -35,6 +36,7 @@
     var acc = { ways: 0, scatter: 0, coin: 0, hold: 0, freeWays: 0, freeScatter: 0, freeCoin: 0, freeHold: 0 };
     var freeTriggers = 0, holdTriggers = 0, grands = 0;
     var jackpotHits = 0, jackpotPaid = 0, jackpotPeak = 0;
+    var holdMultSum = 0, rampageSpins = 0, dropSpins = 0, snowPeak = 0;
     var comboCount = {};
     var maxRound = 0, maxSingle = 0;
     var roundWin = 0, sumSq = 0;
@@ -43,7 +45,7 @@
     var freeWinSum = 0;
     var perSymbol = {};     // 每个图标按连线长度贡献多少 RTP
     var wildSpins = 0, wildReelHits = 0;
-    CONFIG.PAYING.forEach(function (k) { perSymbol[k] = { 3: 0, 4: 0, 5: 0, hits: 0 }; });
+    cfg.PAYING.forEach(function (k) { perSymbol[k] = { 3: 0, 4: 0, 5: 0, hits: 0 }; });
 
     function bucketFor(ratio) {
       if (ratio <= 0) return 0;
@@ -92,6 +94,10 @@
         holdCoinSum += r.hold.filled;
         if (r.hold.grand) grands++;
       }
+      if (r.hold) holdMultSum += r.hold.multiplier;
+      if (r.rampage && r.rampage.active) rampageSpins++;
+      if (r.droppedCells && r.droppedCells.length) dropSpins++;
+      if (r.snowball && r.snowball.mult > snowPeak) snowPeak = r.snowball.mult;
       if (r.jackpot.hit) { jackpotHits++; jackpotPaid += r.jackpot.win; }
       if (r.jackpot.pot > jackpotPeak) jackpotPeak = r.jackpot.pot;
       if (r.free.ended) freeWinSum += r.free.won;
@@ -114,7 +120,8 @@
     var variance = sumSq / rounds - meanRound * meanRound;
 
     var lines = [];
-    lines.push("=== 金龙聚宝 · 数学验证 ===");
+    lines.push("=== 金龙聚宝 · 数学验证 · " + cfg.name + " ===");
+    lines.push("单次下注      " + bet);
     lines.push("旋转总数        " + spins.toLocaleString() + "  (付费 " + baseSpins.toLocaleString() + " / 免费 " + freeSpinsPlayed.toLocaleString() + ")");
     lines.push("随机种子        " + seed);
     lines.push("");
@@ -133,24 +140,29 @@
     lines.push("免费 金锣散赔   " + pct(acc.freeScatter / totalBet));
     lines.push("免费 钱币散赔   " + pct(acc.freeCoin / totalBet));
     lines.push("免费 聚宝盆     " + pct(acc.freeHold / totalBet));
-    lines.push("累积彩金        " + pct(jackpotPaid / totalBet) + "   (投入 " + pct(CONFIG.FEATURES.jackpot.contribution) + ")");
+    lines.push("累积彩金        " + pct(jackpotPaid / totalBet) + "   (投入 " + pct(cfg.FEATURES.jackpot.contribution + cfg.FEATURES.jackpot.reseed) + ")");
     lines.push("");
     lines.push("--- 玩法频率 ---");
     lines.push("龙门免费游戏    每 " + num(baseSpins / Math.max(1, freeTriggers), 0) + " 转一次   (共 " + freeTriggers.toLocaleString() + " 次, 平均产出 " + num(freeWinSum / Math.max(1, freeTriggers) / bet, 1) + "×)");
     lines.push("聚宝盆          每 " + num(spins / Math.max(1, holdTriggers), 0) + " 转一次   (共 " + holdTriggers.toLocaleString() + " 次, 平均 " + num(holdWinSum / Math.max(1, holdTriggers) / bet, 1) + "× / " + num(holdCoinSum / Math.max(1, holdTriggers), 1) + " 枚)");
     lines.push("大满贯(15格)    " + grands.toLocaleString() + " 次  = 每 " + num(spins / Math.max(1, grands), 0) + " 转");
     lines.push("彩金命中        每 " + num(spins / Math.max(1, jackpotHits), 0) + " 转一次   (平均 " + num(jackpotPaid / Math.max(1, jackpotHits) / bet, 1) + "× / 峰值 " + num(jackpotPeak / bet, 0) + "×)");
+    if (cfg.FEATURES.snowball) {
+      lines.push("聚宝盆平均倍率  " + num(holdMultSum / Math.max(1, holdTriggers), 2) + "×   雪球峰值 " + snowPeak + "×");
+      lines.push("金龙狂暴        " + pct(rampageSpins / spins) + " 的旋转处于狂暴中");
+      lines.push("天降横财        每 " + num(spins / Math.max(1, dropSpins), 0) + " 转一次");
+    }
     Object.keys(comboCount).sort().forEach(function (k) {
       lines.push("组合 " + (k + "            ").slice(0, 14) + "每 " + num(spins / comboCount[k], 0) + " 转一次");
     });
     lines.push("");
     lines.push("--- 逐图标 RTP 贡献（含免费游戏与倍率） ---");
     lines.push("图标        3连      4连      5连      合计     命中频率");
-    CONFIG.PAYING.forEach(function (k) {
+    cfg.PAYING.forEach(function (k) {
       var s = perSymbol[k];
       var sum = s[3] + s[4] + s[5];
       lines.push(
-        (CONFIG.SYMBOLS[k].name + "        ").slice(0, 8) +
+        (cfg.SYMBOLS[k].name + "        ").slice(0, 8) +
         (pct(s[3] / totalBet) + "       ").slice(0, 9) +
         (pct(s[4] / totalBet) + "       ").slice(0, 9) +
         (pct(s[5] / totalBet) + "       ").slice(0, 9) +
@@ -168,20 +180,23 @@
     });
     lines.push("");
     lines.push("--- 轮带长度 ---");
-    lines.push("base " + CONFIG.STRIPS.base.map(function (s) { return s.length; }).join(" / ") +
-      "    free " + CONFIG.STRIPS.free.map(function (s) { return s.length; }).join(" / "));
+    lines.push("base " + cfg.STRIPS.base.map(function (s) { return s.length; }).join(" / ") +
+      "    free " + cfg.STRIPS.free.map(function (s) { return s.length; }).join(" / "));
     return lines.join("\n");
   }
 
   var params = new URLSearchParams(location.search);
   var spins = Number(params.get("spins") || 400000);
   var seedList = (params.get("seeds") || "12345").split(",").map(Number);
+  var modeList = (params.get("modes") || params.get("mode") || "normal").split(",");
   var out = [];
-  seedList.forEach(function (seed) {
-    var t0 = Date.now();
-    out.push(run(spins, seed));
-    out.push("耗时 " + ((Date.now() - t0) / 1000).toFixed(1) + "s");
-    out.push("");
+  modeList.forEach(function (modeId) {
+    seedList.forEach(function (seed) {
+      var t0 = Date.now();
+      out.push(run(spins, seed, modeId, Number(params.get("bet")) || 0));
+      out.push("耗时 " + ((Date.now() - t0) / 1000).toFixed(1) + "s");
+      out.push("");
+    });
   });
   document.getElementById("out").textContent = out.join("\n");
 })();

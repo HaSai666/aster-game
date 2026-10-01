@@ -4,7 +4,7 @@
  * 策略是 cache-first + 后台更新（stale-while-revalidate）：
  * 先拿缓存立刻渲染，同时去网上取新版本存起来，下次打开就是新的。
  * ------------------------------------------------------------------ */
-var VERSION = "jinlong-v4";
+var VERSION = "jinlong-v5";
 var SHELL = [
   "./",
   "./index.html",
