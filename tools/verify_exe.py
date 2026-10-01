@@ -35,6 +35,28 @@ if not found:
 
 hwnd, title = found
 print("窗口标题:", title)
+
+# exe 里到底打进了哪一版？上次就被一张过期截图骗过：源码改好了、
+# exe 也重打了，但看的还是上一次的 _exe_shot.png。这里直接去
+# PyInstaller 解包出来的临时目录里核对，比看图可靠。
+import glob, re
+meis = sorted(glob.glob(os.path.join(os.environ.get("TEMP", "/tmp"), "_MEI*")),
+              key=os.path.getmtime, reverse=True)
+for mei in meis[:3]:
+    cfg = os.path.join(mei, "game", "js", "config.js")
+    idx = os.path.join(mei, "game", "index.html")
+    if not (os.path.isfile(cfg) and os.path.isfile(idx)):
+        continue
+    build = re.search(r'var BUILD = "([^"]+)"', open(cfg, encoding="utf-8").read())
+    html = open(idx, encoding="utf-8").read()
+    print("打进去的构建号:", build.group(1) if build else "（没有）")
+    for key, label in [("hall-picker", "入座页选厅"), ("cg-go", "大奖结算 CG"),
+                       ("mode-switch", "顶栏换厅"), ("vip-ladder", "贵宾厅段位"),
+                       ("party-bar", "娱乐模式 HUD")]:
+        print(f"  {label}: {'有' if key in html else '缺'}")
+    break
+else:
+    print("!! 没找到解包目录，没法核对内容")
 time.sleep(9)   # 等游戏渲染出来
 
 r = wt.RECT()
