@@ -1161,6 +1161,29 @@ body.reduced-motion * { transition-duration: .08s !important; }
   .lantern, .mode-dot, .modal-seal { animation: none; }
 }
 
+/* ---------- 桌面：整页不滚动 ----------
+   以前这里只是"尽量不出现滚动条"，结果还是会冒出来一根只能滑一点点的：
+   震屏是给 .shell 加 transform，而带 transform 的元素会计入文档的滚动溢出，
+   一震就撑出几像素；滚动条一出现又占掉宽度、内容重排变高，于是它就赖着不走了。
+   现在改成整页锁死 100% 高度，让机台和侧栏各自在剩余空间里收缩，
+   真正需要滚的只有侧栏里的「战况」列表。 */
+@media (min-width: 1081px) and (min-height: 620px) {
+  html, body { height: 100%; overflow: hidden; }
+  .shell { height: 100%; min-height: 0; }
+  /* 默认的 align-items:start 会让网格项按内容高度收缩，
+     那样 .machine 就撑不满，里面 flex:1 的盘面直接塌成 0。 */
+  .layout { min-height: 0; align-items: stretch; }
+
+  .machine { min-height: 0; }
+  .machine-frame { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  /* 高度改由剩余空间决定，不再用 aspect-ratio 推算 —— 画布本来就能适应任意尺寸 */
+  .stage { flex: 1; min-height: 0; aspect-ratio: auto; }
+
+  .sidebar { min-height: 0; overflow: hidden; }
+  .panel.grow { min-height: 0; }
+  .log-list { max-height: none; flex: 1; }
+}
+
 /* 矮屏幕：把纵向留白挤一挤，尽量不出现滚动条 */
 @media (min-width: 1081px) and (max-height: 840px) {
   .shell { padding: 10px 20px 12px; gap: 9px; }
