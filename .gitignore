@@ -1,1 +1,7 @@
 tools/_shots/
+tools/_exe_shot.png
+tools/jinlong-error.log
+build/
+dist/
+*.spec
+__pycache__/

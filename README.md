@@ -121,11 +121,52 @@
 
 ## 运行
 
-直接用浏览器打开 `index.html` 即可，没有任何依赖。也可以起个静态服务器：
+**网页版**：<https://hasai666.github.io/aster-game/>
+首次打开后 Service Worker 会把整个游戏缓存到本地 —— 之后秒开，断网也能玩，
+手机上还可以「添加到主屏幕」按独立应用运行（没有浏览器地址栏，画面更大也更流畅）。
+
+**本地**：直接用浏览器打开 `index.html` 即可，没有任何依赖。也可以起个静态服务器：
 
 ```
 python -m http.server 8000
 ```
+
+**Windows 桌面版**：自己打一个单文件 exe（约 15 MB，自包含，断网可玩）：
+
+```
+pip install pyinstaller pywebview
+python tools/build_exe.py          # 产出 dist/金龙聚宝.exe
+python tools/verify_exe.py         # 启动它并截图确认真的跑起来了
+```
+
+桌面版用 pywebview 开原生窗口，内核是 Win10/11 自带的 WebView2（Edge）。
+F11 全屏、Ctrl+R 重载。页面脚本若出错会写到 exe 同级的 `jinlong-error.log`。
+
+## 性能
+
+大奖特效在手机上曾经会掉帧。真正的原因不是加载慢（那几个文件第一次就被缓存了），
+而是**渲染开销**：每个粒子都要走一遍 `save/rotate/ellipse/fill/stroke + shadowBlur`，
+而 `shadowBlur` 在移动端是逐次软件模糊。几百个粒子就能把一帧拖到 90ms。
+
+改法：
+
+- **粒子改成预渲染精灵**。开局把钱币的 10 帧翻滚、彩纸的 8 帧旋转、外发光全部烤进
+  一张图集，运行时每个粒子只剩一次 `drawImage`，全程不改 ctx 状态。
+- **中奖高亮也预渲染**。原本每帧给每个中奖格设一次 `shadowBlur` 再画两遍，
+  15 个格子 × 每帧一次软件模糊；现在直接画烤好的发光图。
+- **三档自动画质**。按实测帧时间升降档（粒子数 / 画布 DPR / 放射光开关）。
+  手机默认从中档起步，弱机自动落到低档并关掉所有"一直在跑"的装饰动画。
+  升档阈值必须高于 vsync 的 16.7ms，否则一旦降档就再也升不回来。
+- **静止不重绘**。盘面没有任何东西在动时直接跳过这一帧的绘制。
+- 去掉全屏 `mix-blend-mode`，放射光层缩小并提升为独立合成层。
+
+用 CDP 的 CPU 限速实测（`tools/` 里的测量脚本）：
+
+| 场景 | 优化前（满特效最长帧） | 优化后 |
+| --- | --- | --- |
+| 桌面 无限速 | 40 ms | **28 ms** |
+| 手机 CPU×6 | 91 ms | **45 ms** |
+| 低端机 CPU×12 | 118 ms（29 fps） | **72 ms（42 fps）** |
 
 ## 开发工具
 
@@ -134,6 +175,9 @@ python -m http.server 8000
 | `tools/sim.html` | 蒙特卡洛验证。浏览器打开即可，`?spins=1000000&seeds=1,2` 可调 |
 | `tools/symbols.html` | 图标检视表：大图 / 实际尺寸 / 56px 剪影辨识度 |
 | `tools/drive.py` | 端到端检查。CDP 驱动真实渲染的 Chrome，点按钮、等状态、逐场景截图 |
+| `tools/build_exe.py` | 打包 Windows 单文件 exe |
+| `tools/desktop.py` | 桌面版入口（pywebview + WebView2） |
+| `tools/verify_exe.py` | 启动 exe、按标题找到窗口、截图确认真的渲染出来了 |
 
 `tools/drive.py` 需要 `websocket-client`。headless Chrome 的 `--screenshot` 模式下
 requestAnimationFrame 基本不推进，截不到任何动画，所以改用 DevTools Protocol。
@@ -150,6 +194,8 @@ js/audio.js    WebAudio 合成音频：古筝拨弦、锣、太鼓、五声音�
 js/render.js   Canvas 盘面：真实滚轮物理、方向性动态模糊、擦边球顿停、聚宝盆
 js/fx.js       全屏特效：金币暴雨、冲击波、放射光、闪光、震屏
 js/app.js      状态机、演出编排、等级/任务/签到/彩金等局外系统
+sw.js          Service Worker：整站缓存，秒开 + 离线可玩
+manifest.webmanifest   PWA 清单，支持添加到主屏幕独立运行
 ```
 
 设计文档见 `docs/specs/2026-09-30-jinlong-slots-redesign.html`。

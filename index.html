@@ -6,7 +6,19 @@
   <meta name="theme-color" content="#13070a">
   <meta name="description" content="金龙聚宝：5 轴 243 Ways 的虚拟金币老虎机，含神龙百搭、龙门免费游戏与聚宝盆玩法。不涉及任何真实货币。">
   <title>金龙聚宝 · 243 Ways</title>
+  <script>
+    /* 最早挂上的错误收集器：桌面版没有控制台，出问题时靠它把原因捞出来 */
+    window.__bootErrors = [];
+    window.addEventListener("error", function (e) {
+      window.__bootErrors.push((e.message || "错误") + " @ " + (e.filename || "?") + ":" + (e.lineno || 0));
+    });
+  </script>
   <link rel="stylesheet" href="styles.css">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="docs/images/icon-192.png">
+  <link rel="apple-touch-icon" href="docs/images/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
 </head>
 <body>
   <div class="lantern-layer" aria-hidden="true">
@@ -198,7 +210,7 @@
       <p class="modal-copy">选一笔本局资金。随时可以「收手」把剩下的带回金库。</p>
       <div class="buyin-options" id="buyin-options"></div>
       <p class="wallet-hint">金库余额 <strong id="buyin-wallet">0</strong></p>
-      <button class="link-btn" id="topup-btn">领取 5,000 虚拟金币</button>
+      <button class="link-btn" id="topup-btn">领取虚拟金币</button>
     </div>
   </div>
 
@@ -239,5 +251,14 @@
   <script src="js/fx.js"></script>
   <script src="js/render.js"></script>
   <script src="js/app.js"></script>
+  <script>
+    /* 把整个游戏缓存到本地：第二次打开瞬开，断网也能玩。
+       file:// 和非安全上下文下没有 Service Worker，直接跳过。 */
+    if ("serviceWorker" in navigator && location.protocol.indexOf("http") === 0) {
+      window.addEventListener("load", function () {
+        navigator.serviceWorker.register("sw.js").catch(function () { /* 装不上就当没有，不影响游戏 */ });
+      });
+    }
+  </script>
 </body>
 </html>

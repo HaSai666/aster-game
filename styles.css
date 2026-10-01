@@ -110,10 +110,15 @@ button:disabled { cursor: not-allowed; }
 /* ---------- 全屏特效层 ----------
    放射光压在 UI 之下（z0），金币/暗角/闪光压在 UI 之上（z50+），弹窗更高（z80）。 */
 #fx-rays {
-  position: fixed; inset: -20vmax;
+  /* 这一层在手机上曾经是最贵的：inset -20vmax 的巨大图层 + conic-gradient
+     + mask-image，每帧旋转都要重新光栅化。收小尺寸并提升为独立合成层后，
+     旋转只是 GPU 变换，不再触发重绘。 */
+  position: fixed; inset: -8vmax;
   z-index: 0;
   pointer-events: none;
   opacity: 0;
+  will-change: transform, opacity;
+  transform: translateZ(0);
   transition: opacity .5s;
   background: repeating-conic-gradient(from 0deg at 50% 50%,
     rgba(255, 214, 110, .22) 0deg 5deg, transparent 5deg 14deg);
@@ -135,6 +140,7 @@ button:disabled { cursor: not-allowed; }
   z-index: 51;
   pointer-events: none;
   opacity: 0;
+  will-change: opacity;
   transition: opacity .6s;
   box-shadow: inset 0 0 22vmin var(--vig, rgba(232, 182, 64, .35));
 }
@@ -146,7 +152,7 @@ button:disabled { cursor: not-allowed; }
   z-index: 52;
   pointer-events: none;
   opacity: 0;
-  mix-blend-mode: screen;
+  will-change: opacity;
 }
 #fx-flash.run { animation: fx-flash-out .42s cubic-bezier(.2, .8, .3, 1) forwards; }
 @keyframes fx-flash-out { to { opacity: 0; } }
@@ -1115,6 +1121,22 @@ body.hold-mode .machine-frame {
   box-shadow: var(--shadow-lg), 0 0 60px rgba(232,182,64,.34);
 }
 
+/* 低画质档位（自动降下来的弱机）：关掉所有"一直在跑"的装饰动画。
+   这些单看都不贵，但它们每帧都要重绘各自那块区域，叠起来就是掉帧。 */
+body.low-fx .jackpot-bar::after,
+body.low-fx #fx-vignette,
+body.low-fx .mode-dot,
+body.low-fx .charge-track.hot .charge-fill,
+body.low-fx .charge-track.full .charge-fill,
+body.low-fx .streak-row.hot,
+body.low-fx .daily-cell.next,
+body.low-fx .modal-seal,
+body.low-fx .buy-btn.armed { animation: none !important; }
+body.low-fx .modal-backdrop { backdrop-filter: none; background: rgba(8,2,3,.92); }
+
+/* 金光扫过提升为独立合成层，旋转/位移就不再反复重绘下面那块 */
+.jackpot-bar::after { will-change: transform; }
+
 /* ---------- 减少动效 ---------- */
 body.reduced-motion .jackpot-bar::after,
 body.reduced-motion .daily-cell.next,
@@ -1165,6 +1187,9 @@ body.reduced-motion * { transition-duration: .08s !important; }
 }
 
 @media (max-width: 780px) {
+  /* 手机上这几样性价比最低：全屏毛玻璃、巨大的固定底纹、飘动灯笼 */
+  .modal-backdrop { backdrop-filter: blur(4px); }
+  body::before { display: none; }
   .shell { padding: 12px 12px 16px; gap: 10px; }
   .virtual-badge { display: none; }
   .brand-text b { font-size: 16px; letter-spacing: .1em; white-space: nowrap; }

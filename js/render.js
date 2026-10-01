@@ -56,6 +56,8 @@
     this.shakeAmount = 0;
     this.anticipation = {};      // reelIndex -> 0..1
     this.reducedMotion = false;
+    this.quality = 2;        // 跟随 fx 的画质档位
+    this._dirty = true;
     this.flashOverlay = 0;
     this.onReelStop = null;
     this._raf = null;
@@ -96,6 +98,7 @@
       viewH: gridH
     };
     this.buildAtlas();
+    this._dirty = true;
   };
 
   Renderer.prototype.buildAtlas = function () {
@@ -108,6 +111,7 @@
     this.blurAtlas = {};
     this.softAtlas = {};
     this.iconAtlas = {};
+    this.glowAtlas = {};
 
     Object.keys(CONFIG.SYMBOLS).forEach(function (key) {
       var sym = CONFIG.SYMBOLS[key];
@@ -146,6 +150,24 @@
       ic.translate(L.cellW / 2, L.cellH / 2);
       ART.drawSymbol(ic, key, sym, Math.min(L.cellW, L.cellH) * 0.82);
       self.iconAtlas[key] = icon;
+
+      /* 中奖高亮用的发光版，提前烤好。
+       * 之前是每帧给每个中奖格设一次 shadowBlur 再画两遍，
+       * 15 个格子 × 每帧一次软件模糊，在手机上是实打实的掉帧源。 */
+      var pad = 0.26;
+      var gw = Math.round(L.cellW * (1 + pad * 2));
+      var gh = Math.round(L.cellH * (1 + pad * 2));
+      var gl = document.createElement("canvas");
+      gl.width = Math.round(gw * self.dpr);
+      gl.height = Math.round(gh * self.dpr);
+      var gc = gl.getContext("2d");
+      gc.scale(self.dpr, self.dpr);
+      gc.shadowColor = "rgba(255,214,110,.95)";
+      gc.shadowBlur = L.cellW * 0.32;
+      gc.drawImage(cv, L.cellW * pad, L.cellH * pad, L.cellW, L.cellH);
+      gc.shadowBlur = 0;
+      gc.drawImage(cv, L.cellW * pad, L.cellH * pad, L.cellW, L.cellH);
+      self.glowAtlas[key] = { canvas: gl, w: gw, h: gh };
     });
   };
 
@@ -165,10 +187,11 @@
     return cv;
   };
 
-  Renderer.prototype.setStrips = function (strips) { this.strips = strips; };
+  Renderer.prototype.setStrips = function (strips) { this.strips = strips; this._dirty = true; };
 
   /* 直接把盘面对到某个停轮位置（开局 / 恢复用）。 */
   Renderer.prototype.setStops = function (stops) {
+    this._dirty = true;
     for (var c = 0; c < REELS; c++) {
       this.reels[c].pos = stops[c];
       this.reels[c].prevPos = stops[c];
@@ -305,6 +328,7 @@
   };
 
   Renderer.prototype.clearHighlight = function () {
+    this._dirty = true;
     this.highlight = null;
     this.dimOthers = false;
   };
@@ -330,6 +354,7 @@
 
   Renderer.prototype.burst = function (count, opts) {
     if (this.reducedMotion) count = Math.min(count, 10);
+    count = Math.max(3, Math.round(count * [0.34, 0.62, 1][this.quality]));
     opts = opts || {};
     var L = this.layout;
     var x = opts.x === undefined ? L.w / 2 : opts.x;
@@ -354,6 +379,7 @@
   };
 
   Renderer.prototype.coinRain = function (count) {
+    count = Math.max(6, Math.round(count * [0.3, 0.6, 1][this.quality]));
     var L = this.layout;
     for (var i = 0; i < count; i++) {
       this.particles.push({
@@ -374,6 +400,7 @@
   /* ---------------- 聚宝盆（Hold & Spin）---------------- */
 
   Renderer.prototype.enterHold = function (board) {
+    this._dirty = true;
     this.hold = {
       board: board.slice(),
       spinningReels: new Array(REELS).fill(false),
@@ -382,7 +409,7 @@
     this.clearHighlight();
   };
 
-  Renderer.prototype.exitHold = function () { this.hold = null; };
+  Renderer.prototype.exitHold = function () { this.hold = null; this._dirty = true; };
 
   Renderer.prototype._reelHasFreeCell = function (c) {
     for (var r = 0; r < ROWS; r++) if (!this.hold.board[c * ROWS + r]) return true;
@@ -455,11 +482,31 @@
     var loop = function (now) {
       var dt = Math.min(0.05, (now - self._last) / 1000);
       self._last = now;
-      self.update(dt, now);
-      self.draw(now);
+      if (!document.hidden) {
+        self.update(dt, now);
+        /* 盘面完全静止时不必每帧重画 —— 画布内容本来就还在。
+         * 弱机上这一下能把空闲时的开销直接省掉。 */
+        if (self._busy() || self._dirty) {
+          self._dirty = false;
+          self.draw(now);
+        }
+      }
       self._raf = requestAnimationFrame(loop);
     };
     this._raf = requestAnimationFrame(loop);
+  };
+
+  /* 还有东西在动吗？任何一项为真就得继续画。 */
+  Renderer.prototype._busy = function () {
+    if (this.hold || this.highlight || this.particles.length || this.rings.length) return true;
+    if (this.shakeAmount > 0.2 || this.flashOverlay > 0.01) return true;
+    for (var k in this.wildGrow) if (this.wildGrow.hasOwnProperty(k)) return true;
+    for (var c = 0; c < REELS; c++) {
+      var r = this.reels[c];
+      if (r.anim || r.bounce || r.flash > 0.01 || r.teasing) return true;
+    }
+    for (var a in this.anticipation) if (this.anticipation[a]) return true;
+    return false;
   };
 
   Renderer.prototype.update = function (dt, now) {
@@ -577,18 +624,13 @@
       if (this.wildGrow[c] !== undefined && visible) alpha = 1;
 
       ctx.globalAlpha = alpha;
-      if (isWin) {
-        /* 中奖格：放大一点 + 金色外发光 */
+      var glow = isWin && this.glowAtlas[key];
+      if (glow) {
+        /* 中奖格：放大一点 + 预渲染的金色外发光 */
         var pulse = 1 + Math.sin(this.highlight.t * 7) * 0.05;
-        ctx.save();
-        ctx.translate(x + L.cellW / 2, y + L.cellH / 2);
-        ctx.scale(pulse, pulse);
-        ctx.shadowColor = "rgba(255,214,110,.95)";
-        ctx.shadowBlur = L.cellW * 0.34;
-        ctx.drawImage(img, -L.cellW / 2, -L.cellH / 2, L.cellW, L.cellH);
-        ctx.shadowBlur = 0;
-        ctx.drawImage(img, -L.cellW / 2, -L.cellH / 2, L.cellW, L.cellH);
-        ctx.restore();
+        var gw = glow.w * pulse, gh = glow.h * pulse;
+        ctx.drawImage(glow.canvas,
+          x + L.cellW / 2 - gw / 2, y + L.cellH / 2 - gh / 2, gw, gh);
       } else {
         ctx.drawImage(img, x, y, L.cellW, L.cellH);
       }
@@ -814,8 +856,10 @@
     ctx.fill();
     ctx.lineWidth = big ? 3 : 2;
     ctx.strokeStyle = big ? "#fff0b8" : "rgba(255,214,110,.9)";
-    ctx.shadowColor = big ? "rgba(255,150,60,.95)" : "rgba(255,200,80,.7)";
-    ctx.shadowBlur = rect.w * (big ? 0.34 : 0.2) * (1 + (big ? Math.sin(now / 220) * 0.3 : 0));
+    if (this.quality > 0) {
+      ctx.shadowColor = big ? "rgba(255,150,60,.95)" : "rgba(255,200,80,.7)";
+      ctx.shadowBlur = rect.w * (big ? 0.34 : 0.2) * (1 + (big ? Math.sin(now / 220) * 0.3 : 0));
+    }
     ctx.stroke();
     ctx.shadowBlur = 0;
 

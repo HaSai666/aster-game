@@ -9,7 +9,23 @@
 
   var GOLD = ["#ffe9a0", "#ffd15c", "#e8b640", "#fff6d8", "#c8901f"];
   var FESTIVE = ["#ffd15c", "#ff5a4e", "#fff6d8", "#3fd1a0", "#ff9a3c"];
-  var MAX_PARTICLES = 1400;
+
+  /* 画质档位。手机上默认从中档起步，再按实测帧时间自动升降。
+   * 低端机最怕的不是粒子数量，是每个粒子都走一遍 shadowBlur —— 见 _sheet()。 */
+  var TIERS = [
+    { name: "low",  maxParticles: 420,  count: 0.45, storm: 0.45, dpr: 1,   rays: false },
+    { name: "mid",  maxParticles: 900,  count: 0.75, storm: 0.72, dpr: 1.5, rays: true },
+    { name: "high", maxParticles: 1600, count: 1,    storm: 1,    dpr: 2,   rays: true }
+  ];
+
+  /* 升降档的阈值必须绕开 vsync：60Hz 下帧间隔本来就是 16.7ms，
+   * 升档阈值要是设在 16.7 以下就永远够不到，一旦降档再也升不回来。 */
+  var DOWN_MS = 27;    // 慢于 ~37fps 就降档
+  var UP_MS = 18.5;    // 稳在 60fps 附近才敢升档
+
+  var SPRITE = 64;        // 精灵单帧边长
+  var COIN_FRAMES = 10;   // 钱币翻滚的压扁帧
+  var CONF_FRAMES = 8;    // 彩纸旋转帧
 
   function ScreenFX(canvas, shellEl) {
     this.canvas = canvas;
@@ -25,18 +41,32 @@
     this._raf = null;
     this._last = 0;
 
+    /* 粗判一下是不是手机：触摸屏 + 窄屏就从中档起步，
+     * 免得第一次大奖还没来得及降档就先卡一下。 */
+    var coarse = root.matchMedia && root.matchMedia("(pointer: coarse)").matches;
+    this.tier = (coarse || root.innerWidth < 900) ? 1 : 2;
+    this._sheets = {};          // 颜色 -> 预渲染精灵表
+    this._frameEma = 16.7;      // 帧时间指数移动平均
+    /* 开头几秒在建图集、解析脚本，帧时间天然难看，先不参与判断 */
+    this._tierHold = performance.now() + 3000;
+    this.paused = false;
+
     this.flashEl = document.getElementById("fx-flash");
     this.raysEl = document.getElementById("fx-rays");
     this.vignetteEl = document.getElementById("fx-vignette");
 
     this.resize();
+    /* 开局就把调色板的精灵表全烤好。否则第一次大奖时才懒加载，
+     * 一次要渲染 18 帧，在低端机上正好砸出一个上百毫秒的掉帧。 */
     var self = this;
+    GOLD.concat(FESTIVE).forEach(function (col) { self._sheet(col); });
+
     root.addEventListener("resize", function () { self.resize(); });
     this.start();
   }
 
   ScreenFX.prototype.resize = function () {
-    var dpr = Math.min(root.devicePixelRatio || 1, 2);
+    var dpr = Math.min(root.devicePixelRatio || 1, TIERS[this.tier].dpr);
     this.w = root.innerWidth;
     this.h = root.innerHeight;
     this.dpr = dpr;
@@ -52,15 +82,76 @@
     var loop = function (now) {
       var dt = Math.min(0.05, (now - self._last) / 1000);
       self._last = now;
-      self.update(dt, now);
-      self.draw();
+      /* 页面不可见时只排队、不渲染，省电也避免回来时积压一大堆 */
+      if (!document.hidden) {
+        self.update(dt, now);
+        self.draw();
+      }
       self._raf = requestAnimationFrame(loop);
     };
     this._raf = requestAnimationFrame(loop);
   };
 
+  /* 预渲染精灵表：把"圆形 + 发光 + 方孔"一次性烤进图里。
+   * 之前每个粒子都要 save/translate/rotate/ellipse/fill/stroke + shadowBlur，
+   * shadowBlur 在移动端是逐次软件模糊，几百个粒子直接把帧时间拉到 90ms。
+   * 现在每个粒子只剩一次 drawImage。 */
+  ScreenFX.prototype._sheet = function (color) {
+    var cached = this._sheets[color];
+    if (cached) return cached;
+
+    var total = COIN_FRAMES + CONF_FRAMES;
+    var cv = document.createElement("canvas");
+    cv.width = SPRITE * total;
+    cv.height = SPRITE;
+    var c = cv.getContext("2d");
+    var half = SPRITE / 2;
+    var r = SPRITE * 0.30;      // 留出外发光的余量
+
+    for (var i = 0; i < COIN_FRAMES; i++) {
+      var squash = i / (COIN_FRAMES - 1);          // 0 = 侧面，1 = 正面
+      var ry = r * (0.16 + squash * 0.84);
+      c.save();
+      c.translate(i * SPRITE + half, half);
+      /* 外发光烤进精灵 */
+      var glow = c.createRadialGradient(0, 0, r * 0.3, 0, 0, r * 1.6);
+      glow.addColorStop(0, color);
+      glow.addColorStop(1, "rgba(0,0,0,0)");
+      c.globalAlpha = 0.55;
+      c.fillStyle = glow;
+      c.beginPath(); c.ellipse(0, 0, r * 1.6, Math.max(ry, r * 0.5) * 1.5, 0, 0, Math.PI * 2); c.fill();
+      c.globalAlpha = 1;
+      c.fillStyle = color;
+      c.beginPath(); c.ellipse(0, 0, r, ry, 0, 0, Math.PI * 2); c.fill();
+      c.strokeStyle = "rgba(140,85,10,.75)";
+      c.lineWidth = 1.2;
+      c.stroke();
+      if (squash > 0.55) {
+        c.fillStyle = "rgba(130,78,8,.6)";
+        c.fillRect(-r * 0.22, -ry * 0.22, r * 0.44, ry * 0.44);
+      }
+      c.restore();
+    }
+
+    for (var k = 0; k < CONF_FRAMES; k++) {
+      var ang = (k / CONF_FRAMES) * Math.PI;
+      c.save();
+      c.translate((COIN_FRAMES + k) * SPRITE + half, half);
+      c.rotate(ang);
+      c.fillStyle = color;
+      c.globalAlpha = 0.5;
+      c.fillRect(-r * 0.9, -r * 0.5, r * 1.8, r);
+      c.globalAlpha = 1;
+      c.fillRect(-r * 0.8, -r * 0.26, r * 1.6, r * 0.52);
+      c.restore();
+    }
+
+    this._sheets[color] = cv;
+    return cv;
+  };
+
   ScreenFX.prototype._push = function (p) {
-    if (this.parts.length >= MAX_PARTICLES) this.parts.shift();
+    if (this.parts.length >= TIERS[this.tier].maxParticles) this.parts.shift();
     this.parts.push(p);
   };
 
@@ -68,6 +159,7 @@
   ScreenFX.prototype.burst = function (count, opts) {
     opts = opts || {};
     if (this.reduced) count = Math.min(count, 24);
+    count = Math.max(4, Math.round(count * TIERS[this.tier].count));
     var x = opts.x === undefined ? this.w / 2 : opts.x;
     var y = opts.y === undefined ? this.h * 0.45 : opts.y;
     var colors = opts.colors || GOLD;
@@ -95,6 +187,7 @@
   /* 持续的金币暴雨：ms 毫秒内每秒 rate 枚。 */
   ScreenFX.prototype.coinStorm = function (ms, rate) {
     if (this.reduced) { ms = Math.min(ms, 700); rate = Math.min(rate, 25); }
+    rate = Math.max(6, rate * TIERS[this.tier].storm);
     var until = performance.now() + ms;
     if (this.storm && this.storm.until > until) {
       this.storm.rate = Math.max(this.storm.rate, rate);
@@ -150,7 +243,7 @@
 
   /* 背后的旋转放射光，用于大奖/玩法期间 */
   ScreenFX.prototype.rays = function (ms, intensity) {
-    if (!this.raysEl || this.reduced) return;
+    if (!this.raysEl || this.reduced || !TIERS[this.tier].rays) return;
     this.raysEl.style.setProperty("--rays-opacity", String(intensity || 0.5));
     this.raysEl.classList.add("on");
     clearTimeout(this._raysTimer);
@@ -189,8 +282,28 @@
     if (level >= 2) this.rays(1200 + level * 600, 0.28 + level * 0.14);
   };
 
+  /* 按实测帧时间自动升降画质。降档要快（卡了马上救），升档要慢（别来回抖）。 */
+  ScreenFX.prototype._adapt = function (dtMs, now) {
+    this._frameEma = this._frameEma * 0.9 + dtMs * 0.1;
+    if (now < this._tierHold) return;
+    if (this._frameEma > DOWN_MS && this.tier > 0) {
+      this.tier--;
+      this._tierHold = now + 3000;
+      this.resize();
+      if (this.tier === 0) this.raysOff();
+      if (this.onTierChange) this.onTierChange(this.tier);
+    } else if (this._frameEma < UP_MS && this.tier < TIERS.length - 1 && this.parts.length > 40) {
+      /* 只有在"正扛着不少粒子还很流畅"的时候才敢升档 */
+      this.tier++;
+      this._tierHold = now + 6000;
+      this.resize();
+      if (this.onTierChange) this.onTierChange(this.tier);
+    }
+  };
+
   ScreenFX.prototype.update = function (dt, now) {
     var self = this;
+    this._adapt(dt * 1000, now);
 
     if (this.storm) {
       if (now > this.storm.until) this.storm = null;
@@ -236,49 +349,48 @@
 
   ScreenFX.prototype.draw = function () {
     var ctx = this.ctx;
+    var self = this;
     ctx.clearRect(0, 0, this.w, this.h);
 
     this.rings.forEach(function (r) {
+      var tierHi = self.tier > 0;
       var t = r.t / r.dur;
       var e = 1 - Math.pow(1 - t, 3);
       ctx.save();
       ctx.globalAlpha = (1 - t) * 0.9;
       ctx.strokeStyle = r.color;
       ctx.lineWidth = Math.max(1, r.width * (1 - t));
-      ctx.shadowColor = r.color;
-      ctx.shadowBlur = 26;
+      if (tierHi) { ctx.shadowColor = r.color; ctx.shadowBlur = 26; }
       ctx.beginPath();
       ctx.arc(r.x, r.y, r.max * e * 0.5, 0, Math.PI * 2);
       ctx.stroke();
       ctx.restore();
     });
 
+    /* 粒子：一个粒子一次 drawImage，全程不改 ctx 状态（除了 alpha）。
+     * 以前这里是 save/translate/rotate/ellipse/fill/stroke + shadowBlur，
+     * 在手机上几百个粒子就能把一帧拖到 90ms。 */
+    var prevAlpha = -1;
     for (var i = 0; i < this.parts.length; i++) {
       var p = this.parts[i];
       var fade = 1 - p.life / p.max;
-      ctx.save();
-      ctx.globalAlpha = Math.max(0, Math.min(1, fade * 1.6));
-      ctx.translate(p.x, p.y);
-      ctx.rotate(p.rot);
-      if (p.glow) { ctx.shadowColor = p.color; ctx.shadowBlur = p.size * 0.9; }
-      ctx.fillStyle = p.color;
+      var a = fade > 0.62 ? 1 : fade / 0.62;
+      if (a <= 0.01) continue;
+      /* alpha 量化到 0.05 一档，减少状态切换 */
+      var qa = Math.round(a * 20) / 20;
+      if (qa !== prevAlpha) { ctx.globalAlpha = qa; prevAlpha = qa; }
+
+      var frame;
       if (p.shape === "coin") {
-        /* 横向压扁模拟翻滚的钱币 */
-        var squash = Math.abs(Math.cos(p.rot * 1.5));
-        ctx.beginPath();
-        ctx.ellipse(0, 0, p.size * 0.5, p.size * 0.5 * (0.2 + squash * 0.8), 0, 0, Math.PI * 2);
-        ctx.fill();
-        if (squash > 0.55) {
-          ctx.fillStyle = "rgba(120,70,8,.55)";
-          ctx.beginPath();
-          ctx.rect(-p.size * 0.14, -p.size * 0.14 * squash, p.size * 0.28, p.size * 0.28 * squash);
-          ctx.fill();
-        }
+        frame = (Math.abs(Math.cos(p.rot * 1.5)) * (COIN_FRAMES - 1)) | 0;
       } else {
-        ctx.fillRect(-p.size * 0.4, -p.size * 0.22, p.size * 0.8, p.size * 0.44);
+        frame = COIN_FRAMES + ((((p.rot / Math.PI) % 1) + 1) % 1 * CONF_FRAMES | 0);
       }
-      ctx.restore();
+      var d = p.size * 2.4;      // 精灵里含发光余量
+      ctx.drawImage(this._sheet(p.color), frame * SPRITE, 0, SPRITE, SPRITE,
+                    p.x - d * 0.5, p.y - d * 0.5, d, d);
     }
+    ctx.globalAlpha = 1;
   };
 
   root.ASTER_FX = { ScreenFX: ScreenFX, GOLD: GOLD, FESTIVE: FESTIVE };

@@ -1,0 +1,16 @@
+{
+  "name": "金龙聚宝 · 243 Ways",
+  "short_name": "金龙聚宝",
+  "description": "虚拟金币老虎机，5 轴 3 行 243 Ways。不涉及任何真实货币。",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#13070a",
+  "theme_color": "#13070a",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "docs/images/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "docs/images/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

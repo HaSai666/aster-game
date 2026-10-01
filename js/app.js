@@ -1348,6 +1348,13 @@
     renderer.reducedMotion = state.reducedMotion;
     fx = new window.ASTER_FX.ScreenFX(el.fxCanvas, document.querySelector(".shell"));
     fx.reduced = state.reducedMotion;
+    /* 画质档位由 fx 根据实测帧时间自动升降，盘面渲染跟着一起走 */
+    renderer.quality = fx.tier;
+    document.body.classList.toggle("low-fx", fx.tier === 0);
+    fx.onTierChange = function (tier) {
+      renderer.quality = tier;
+      document.body.classList.toggle("low-fx", tier === 0);
+    };
     engine.charge = Math.min(F.charge.max - 1, state.charge || 0);
     /* 彩金池和储备跨会话延续，玩家离开时攒的钱不会白攒 */
     if (typeof state.jackpotPot === "number") engine.jackpot = state.jackpotPot;
@@ -1363,6 +1370,7 @@
     audio.setSfx(state.soundOn);
     audio.musicOn = state.musicOn;
 
+    el.topupBtn.textContent = "领取 " + money(CONFIG.ECONOMY.topUp) + " 虚拟金币";
     el.buyinOptions.innerHTML = CONFIG.ECONOMY.buyins.map(function (b) {
       return '<button data-amount="' + b.amount + '"><b>' + money(b.amount) + "</b><span>" + b.title + "</span><small>" + b.note + "</small></button>";
     }).join("");
